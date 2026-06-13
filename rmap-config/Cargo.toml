@@ -13,3 +13,4 @@ rmap-core = { path = "../rmap-core" }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 slint = "1.16"
+rfd = "0.15"
