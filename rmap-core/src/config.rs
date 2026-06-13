@@ -1,6 +1,7 @@
 //! Minimal config + profile loader for prototype.
 //! JSON for app->profile map and global defaults. Layouts still loaded via LayoutLoader trait (DvorakJ files).
 
+use crate::keycode::KeyCode;
 use crate::profile::{Profile, ProfileId, AppProfileMap, ProfileToggles};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -11,6 +12,25 @@ pub struct AppConfig {
     pub profiles: HashMap<ProfileId, ProfileDef>,
     pub app_map: AppProfileMap,
     pub default_layout: String, // layout file path or id for the default profile
+    /// FR-6: keys that disable remapping while held (e.g. ["ctrl","alt","win"]).
+    /// Generic modifier names expand to both L/R variants. Empty = feature off.
+    #[serde(default)]
+    pub disable_keys: Vec<String>,
+}
+
+/// Expand a config key name to the concrete `KeyCode`s it covers. Generic
+/// modifier names ("ctrl"/"alt"/"win"/"shift"/"meta") expand to both L and R
+/// variants so a user need not care which physical modifier they press;
+/// everything else falls back to the DvorakJ name table. Unknown names yield
+/// an empty Vec (caller decides whether to warn/ignore).
+pub fn keycodes_from_config_name(name: &str) -> Vec<KeyCode> {
+    match name.trim().to_lowercase().as_str() {
+        "ctrl" | "control" => vec![KeyCode::CtrlL, KeyCode::CtrlR],
+        "alt" | "menu" => vec![KeyCode::AltL, KeyCode::AltR],
+        "win" | "meta" | "super" | "cmd" => vec![KeyCode::MetaL, KeyCode::MetaR],
+        "shift" => vec![KeyCode::ShiftL, KeyCode::ShiftR],
+        other => KeyCode::from_dvorakj_name(other).into_iter().collect(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,7 +81,16 @@ impl AppConfig {
                 default_profile: "default".to_string(),
             },
             default_layout: "data/layouts/samples/toy_simul.txt".to_string(),
+            disable_keys: Vec::new(),
         }
+    }
+
+    /// FR-6: resolve `disable_keys` names to a flat KeyCode set for the matcher.
+    pub fn disable_keycodes(&self) -> Vec<KeyCode> {
+        self.disable_keys
+            .iter()
+            .flat_map(|n| keycodes_from_config_name(n))
+            .collect()
     }
 
     pub fn default_profile(&self) -> Option<Profile> {

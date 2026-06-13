@@ -43,8 +43,12 @@ pub fn install_and_run_windows_hook() -> JoinHandle<()> {
     let initial_app = get_foreground_app_id();
     let layout = load_layout_for_app(&initial_app, &app_config);
 
+    let mut matcher = InputMatcher::default();
+    // FR-6: apply configured disable keys (held -> full passthrough).
+    matcher.set_disable_keys(app_config.disable_keycodes());
+
     let state = HookState {
-        matcher: InputMatcher::default(),
+        matcher,
         layout: std::sync::Arc::new(layout),
         app_config,
         current_app: initial_app,
@@ -395,13 +399,45 @@ pub fn reload_layout() {
     let new_layout = load_layout_for_app(&app, &new_cfg);
     if let Some(state) = HOOK_STATE.get() {
         if let Ok(mut st) = state.lock() {
+            st.matcher.clear();
+            // FR-6: re-apply disable keys from the freshly loaded config.
+            st.matcher.set_disable_keys(new_cfg.disable_keycodes());
             st.app_config = new_cfg;
             st.current_app = app;
-            st.matcher.clear();
             st.layout = std::sync::Arc::new(new_layout);
             // In real app we would log "layout reloaded"
         }
     }
+}
+
+/// FR-8: persistent stop/resume control for the live matcher. Driven by tray,
+/// IPC, or (later) a global hotkey. `set_suspend(true)` = 停止, `false` = 再開.
+pub fn set_suspend(suspended: bool) {
+    if let Some(state) = HOOK_STATE.get() {
+        if let Ok(mut st) = state.lock() {
+            st.matcher.set_suspended(suspended);
+        }
+    }
+}
+
+/// FR-8: flip stop/resume; returns the new suspended state (true = stopped).
+pub fn toggle_suspend() -> bool {
+    if let Some(state) = HOOK_STATE.get() {
+        if let Ok(mut st) = state.lock() {
+            return st.matcher.toggle_suspended();
+        }
+    }
+    false
+}
+
+/// FR-8: query current suspended state (for IPC Status).
+pub fn is_suspended() -> bool {
+    if let Some(state) = HOOK_STATE.get() {
+        if let Ok(st) = state.lock() {
+            return st.matcher.is_suspended();
+        }
+    }
+    false
 }
 
 /// Get a stable app identifier from the current foreground window (exe basename, lower, no .exe).

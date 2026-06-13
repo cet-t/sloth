@@ -13,11 +13,15 @@ pub enum IpcCommand {
     Reload,
     Status,
     Quit,
+    /// FR-8 daemon control hotkeys.
+    Stop,
+    Resume,
+    ToggleRunning,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum IpcResponse {
     Ok,
-    Status { version: String, active_app: String },
+    Status { version: String, active_app: String, suspended: bool },
     Error(String),
 }

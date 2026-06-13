@@ -30,6 +30,12 @@ pub struct InputMatcher {
     /// Keys whose key-down we blocked/consumed, so their key-up is blocked too
     /// (prevents a stray key-up reaching the OS for a key it never saw go down).
     blocked: HashSet<KeyCode>,
+    /// FR-6: while any of these keys is held, the engine fully passes through
+    /// (acts as if rmap were not running). Config-level, not per-layout.
+    disable_keys: HashSet<KeyCode>,
+    /// FR-8: persistent stop/resume state (toggled by hotkey/IPC). While true,
+    /// every event passes through (except draining in-flight blocked key-ups).
+    suspended: bool,
     // For Sequential later...
 }
 
@@ -40,6 +46,8 @@ impl Default for InputMatcher {
             combo_window: Duration::from_millis(DEFAULT_COMBO_WINDOW_MS),
             layer_had_partner: HashSet::new(),
             blocked: HashSet::new(),
+            disable_keys: HashSet::new(),
+            suspended: false,
         }
     }
 }
@@ -60,6 +68,15 @@ impl InputMatcher {
             EventKind::KeyDown => {
                 if !self.pressed.contains(&event.code) {
                     self.pressed.insert(event.code);
+                }
+
+                // FR-6/FR-8 bypass: if globally suspended, or any disable key is
+                // now held (the disable key itself is inserted above, so its own
+                // down also passes through), forward everything unchanged. Keys
+                // whose key-down was consumed *before* the bypass began still
+                // drain their key-up via `blocked` in the KeyUp arm below.
+                if self.bypass_active() {
+                    return MatchAction::PassThrough;
                 }
 
                 // Layer key down: block it (the OS must not see the raw layer
@@ -109,7 +126,19 @@ impl InputMatcher {
                 MatchAction::PassThrough
             }
             EventKind::KeyUp => {
+                // FR-6/FR-8: evaluate bypass while the key is still in `pressed`
+                // (so a disable key's own up is still seen as "held" -> passthrough).
+                let bypass = self.bypass_active();
                 let was_pressed = self.pressed.remove(&event.code);
+
+                if bypass {
+                    // In-flight key consumed before bypass began: block its up so
+                    // no stray key-up reaches the OS; everything else passes.
+                    if self.blocked.remove(&event.code) {
+                        return MatchAction::Block;
+                    }
+                    return MatchAction::PassThrough;
+                }
 
                 if layout.is_layer_trigger(event.code) {
                     self.blocked.remove(&event.code);
@@ -154,6 +183,36 @@ impl InputMatcher {
 
     fn any_layer_held(&self, layout: &Layout) -> bool {
         self.pressed.iter().any(|k| layout.is_layer_trigger(*k))
+    }
+
+    /// FR-6/FR-8: true when the engine should pass everything through —
+    /// either globally suspended, or a configured disable key is held.
+    fn bypass_active(&self) -> bool {
+        self.suspended || self.any_disable_key_held()
+    }
+
+    fn any_disable_key_held(&self) -> bool {
+        !self.disable_keys.is_empty() && self.pressed.iter().any(|k| self.disable_keys.contains(k))
+    }
+
+    /// FR-6: set the keys that, while held, fully disable remapping. Replaces
+    /// any previous set. Called at config load/reload.
+    pub fn set_disable_keys(&mut self, keys: impl IntoIterator<Item = KeyCode>) {
+        self.disable_keys = keys.into_iter().collect();
+    }
+
+    /// FR-8: persistent stop/resume.
+    pub fn set_suspended(&mut self, suspended: bool) {
+        self.suspended = suspended;
+    }
+
+    pub fn toggle_suspended(&mut self) -> bool {
+        self.suspended = !self.suspended;
+        self.suspended
+    }
+
+    pub fn is_suspended(&self) -> bool {
+        self.suspended
     }
 
     fn mark_layers_had_partner(&mut self, layout: &Layout) {

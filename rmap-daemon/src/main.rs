@@ -1,7 +1,7 @@
 //! rmap-daemon: resident remapper. Owns hooks, applies layouts, IPC server, tray.
 
 use anyhow::Result;
-use rmap_core::hook::{install_and_run_windows_hook, reload_layout};
+use rmap_core::hook::{install_and_run_windows_hook, reload_layout, set_suspend, toggle_suspend, is_suspended};
 use rmap_core::ipc::start_ipc_server;
 use std::path::Path;
 use std::time::Duration;
@@ -26,8 +26,10 @@ fn main() -> Result<()> {
     let icon = create_simple_icon();
     let tray_menu = Menu::new();
     let reload_item = MenuItem::new("Reload layout", true, None);
+    let toggle_item = MenuItem::new("Pause / Resume remap", true, None); // FR-8
     let quit_item = MenuItem::new("Quit", true, None);
     tray_menu.append(&reload_item).ok();
+    tray_menu.append(&toggle_item).ok();
     tray_menu.append(&quit_item).ok();
 
     let _tray = TrayIconBuilder::new()
@@ -55,11 +57,31 @@ fn main() -> Result<()> {
                 rmap_core::ipc::IpcResponse::Ok
             }
             rmap_core::ipc::IpcCommand::Status => {
-                rmap_core::ipc::IpcResponse::Status { version: env!("CARGO_PKG_VERSION").into(), active_app: String::new() }
+                rmap_core::ipc::IpcResponse::Status {
+                    version: env!("CARGO_PKG_VERSION").into(),
+                    active_app: String::new(),
+                    suspended: is_suspended(),
+                }
             }
             rmap_core::ipc::IpcCommand::Quit => {
                 println!("IPC: quit requested");
                 // In real: signal main loop; for prototype we just ack.
+                rmap_core::ipc::IpcResponse::Ok
+            }
+            // FR-8: daemon control hotkeys / commands.
+            rmap_core::ipc::IpcCommand::Stop => {
+                println!("IPC: stop (suspend remapping)");
+                set_suspend(true);
+                rmap_core::ipc::IpcResponse::Ok
+            }
+            rmap_core::ipc::IpcCommand::Resume => {
+                println!("IPC: resume remapping");
+                set_suspend(false);
+                rmap_core::ipc::IpcResponse::Ok
+            }
+            rmap_core::ipc::IpcCommand::ToggleRunning => {
+                let now = toggle_suspend();
+                println!("IPC: toggle running -> {}", if now { "stopped" } else { "running" });
                 rmap_core::ipc::IpcResponse::Ok
             }
         }
@@ -72,6 +94,9 @@ fn main() -> Result<()> {
             if event.id == reload_item.id() {
                 println!("Tray: manual reload");
                 reload_layout();
+            } else if event.id == toggle_item.id() {
+                let stopped = toggle_suspend();
+                println!("Tray: remap {}", if stopped { "paused" } else { "resumed" });
             } else if event.id == quit_item.id() {
                 println!("Tray: quit");
                 std::process::exit(0);

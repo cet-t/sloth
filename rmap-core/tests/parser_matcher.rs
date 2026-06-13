@@ -100,3 +100,78 @@ fn unmapped_key_passes_through() {
     assert!(!base.is_empty());
     assert_eq!(m.process(&up(KeyCode::Q), &layout), MatchAction::Block);
 }
+
+/// FR-6: while a configured disable key is held, every key passes through
+/// unchanged (rmap acts as if not running); remapping resumes after release.
+#[test]
+fn disable_key_held_passes_everything_through() {
+    let loader = DvorakJLayoutLoader::new();
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let path = std::path::Path::new(&manifest).join("../data/layouts/samples/toy_combo.txt");
+    let bytes = std::fs::read(&path).unwrap();
+    let layout = loader.load(&bytes, "test-disable").unwrap();
+
+    let mut m = InputMatcher::default();
+    m.set_disable_keys([KeyCode::CtrlL, KeyCode::CtrlR]);
+
+    // Disable key itself passes through (OS still sees Ctrl for its own shortcuts).
+    assert_eq!(m.process(&down(KeyCode::CtrlL), &layout), MatchAction::PassThrough);
+    // A normally-remapped key is NOT remapped while Ctrl is held.
+    assert_eq!(m.process(&down(KeyCode::Q), &layout), MatchAction::PassThrough);
+    assert_eq!(m.process(&up(KeyCode::Q), &layout), MatchAction::PassThrough);
+    // Release the disable key (still seen as held at evaluation time -> passthrough).
+    assert_eq!(m.process(&up(KeyCode::CtrlL), &layout), MatchAction::PassThrough);
+
+    // Remapping is active again once the disable key is up.
+    let base = emit(m.process(&down(KeyCode::Q), &layout));
+    assert!(!base.is_empty());
+    assert_eq!(m.process(&up(KeyCode::Q), &layout), MatchAction::Block);
+}
+
+/// FR-6: a key whose key-down was consumed *before* the disable key went down
+/// still has its key-up blocked (symmetric), so no stray key-up leaks.
+#[test]
+fn disable_key_drains_inflight_blocked_keyup() {
+    let loader = DvorakJLayoutLoader::new();
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let path = std::path::Path::new(&manifest).join("../data/layouts/samples/toy_combo.txt");
+    let bytes = std::fs::read(&path).unwrap();
+    let layout = loader.load(&bytes, "test-disable2").unwrap();
+
+    let mut m = InputMatcher::default();
+    m.set_disable_keys([KeyCode::AltL, KeyCode::AltR]);
+
+    // Q consumed (remapped) before any disable key.
+    let _ = emit(m.process(&down(KeyCode::Q), &layout));
+    // Now Alt goes down -> bypass begins; Alt passes through.
+    assert_eq!(m.process(&down(KeyCode::AltL), &layout), MatchAction::PassThrough);
+    // Q's key-up must still be blocked (its down was consumed) — symmetric blocking.
+    assert_eq!(m.process(&up(KeyCode::Q), &layout), MatchAction::Block);
+    assert_eq!(m.process(&up(KeyCode::AltL), &layout), MatchAction::PassThrough);
+}
+
+/// FR-8: persistent stop/resume. While suspended, everything passes through;
+/// resuming restores remapping. toggle_suspended flips and reports the state.
+#[test]
+fn suspend_toggle_passes_through_and_restores() {
+    let loader = DvorakJLayoutLoader::new();
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let path = std::path::Path::new(&manifest).join("../data/layouts/samples/toy_combo.txt");
+    let bytes = std::fs::read(&path).unwrap();
+    let layout = loader.load(&bytes, "test-suspend").unwrap();
+
+    let mut m = InputMatcher::default();
+    assert!(!m.is_suspended());
+
+    // Stop: everything passes through.
+    assert!(m.toggle_suspended(), "toggle should report suspended=true");
+    assert!(m.is_suspended());
+    assert_eq!(m.process(&down(KeyCode::Q), &layout), MatchAction::PassThrough);
+    assert_eq!(m.process(&up(KeyCode::Q), &layout), MatchAction::PassThrough);
+
+    // Resume: remapping restored.
+    assert!(!m.toggle_suspended(), "toggle should report suspended=false");
+    let base = emit(m.process(&down(KeyCode::Q), &layout));
+    assert!(!base.is_empty());
+    assert_eq!(m.process(&up(KeyCode::Q), &layout), MatchAction::Block);
+}
