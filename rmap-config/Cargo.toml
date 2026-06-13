@@ -10,5 +10,6 @@ path = "src/main.rs"
 
 [dependencies]
 rmap-core = { path = "../rmap-core" }
-# slint later for GUI (step 12)
-# For prototype, can be CLI stub first, then Slint
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+slint = "1.16"

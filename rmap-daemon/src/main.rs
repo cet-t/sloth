@@ -199,10 +199,30 @@ fn restart_daemon() {
     }
 }
 
-/// 設定: open the config file in the OS default handler. The Slint settings GUI
-/// is not yet built (see plan.md Non-Goals / roadmap 12), so for the prototype
-/// this surfaces the JSON config the daemon actually reads.
+/// 設定: launch the rmap-config settings window (Slint GUI). Falls back to
+/// opening data/config.json in the OS default handler if the settings binary
+/// can't be found (e.g. not yet built next to the daemon).
 fn open_settings() {
+    let rmap_config = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("rmap-config.exe")));
+
+    if let Some(exe) = &rmap_config {
+        if exe.exists() {
+            match std::process::Command::new(exe).spawn() {
+                Ok(_) => log::log(format!("settings: launched {}", exe.display())),
+                Err(e) => {
+                    eprintln!("設定 failed to launch {}: {e}", exe.display());
+                    log::log(format!("settings: failed to launch {}: {e}", exe.display()));
+                }
+            }
+            return;
+        }
+        log::log(format!("settings: {} not found, falling back to file open", exe.display()));
+    } else {
+        log::log("settings: could not determine current_exe, falling back to file open");
+    }
+
     let path = Path::new("data/config.json");
     let target = if path.exists() { "data/config.json" } else { "data" };
     // `cmd /C start "" <target>` opens with the default associated program.
@@ -211,6 +231,7 @@ fn open_settings() {
         .spawn()
     {
         eprintln!("設定 failed to open {target}: {e}");
+        log::log(format!("settings: failed to open {target}: {e}"));
     }
 }
 
