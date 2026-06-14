@@ -118,6 +118,9 @@ fn run_settings_window() -> Result<()> {
 
     window.set_default_layout(cfg.default_layout.clone().into());
     window.set_enable_log(cfg.enable_log);
+    window.set_activate_only_when_ime_on(cfg.activate_only_when_ime_on);
+    window.set_combo_window_ms(if cfg.combo_window_ms > 0 { cfg.combo_window_ms as i32 } else { 40 });
+    window.set_hold_mode(cfg.hold_mode);
 
     let lower_disable: Vec<String> = cfg
         .disable_keys
@@ -312,6 +315,9 @@ fn run_settings_window() -> Result<()> {
             base_cfg.app_map.default_profile = name.to_string();
         }
         base_cfg.enable_log = window.get_enable_log();
+        base_cfg.activate_only_when_ime_on = window.get_activate_only_when_ime_on();
+        base_cfg.combo_window_ms = window.get_combo_window_ms().max(1) as u64;
+        base_cfg.hold_mode = window.get_hold_mode();
 
         let mut disable_keys = custom_disable_keys.clone();
         if window.get_disable_ctrl() {

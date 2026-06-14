@@ -2,8 +2,9 @@
 //! Follows plan: dedicated thread for hook + message loop, bidirectional KeyCode map,
 //! eat original on remap, pass injected events, low latency decision inside callback.
 
-use crate::{Event, EventKind, KeyCode, Modifiers, OutputSeq, OutputToken, SpecialKey, InputMatcher, MatchAction, layout::Layout, DvorakJLayoutLoader, config::AppConfig, loader::LayoutLoader};
+use crate::{Event, EventKind, KeyCode, KeyboardLayout, Modifiers, OutputSeq, OutputToken, SpecialKey, InputMatcher, MatchAction, layout::Layout, DvorakJLayoutLoader, config::AppConfig, loader::LayoutLoader};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM, HANDLE, CloseHandle};
@@ -25,14 +26,99 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+use windows::Win32::UI::Input::Ime::ImmGetDefaultIMEWnd;
+use windows::Win32::UI::WindowsAndMessaging::{SendMessageTimeoutW, SMTO_ABORTIFHUNG};
 
 static HOOK_STATE: OnceLock<Mutex<HookState>> = OnceLock::new();
+
+/// When true, the active layout is configured to remap only while the IME is
+/// OFF (see `AppConfig::activate_only_when_ime_off`). Read lock-free by the
+/// IME poll thread; set on install/reload.
+static IME_GATING: AtomicBool = AtomicBool::new(false);
+
+/// Last IME open state we logged, so transitions are logged once (not every
+/// poll). -1 = unknown, 0 = closed/off, 1 = open/on.
+static LAST_IME_LOG: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
+
+/// `WM_IME_CONTROL` / `IMC_GETOPENSTATUS`: query whether the IME is open
+/// (Japanese conversion on). Not exported by the `windows` crate, so spelled
+/// out here.
+const WM_IME_CONTROL: u32 = 0x0283;
+const IMC_GETOPENSTATUS: usize = 0x0005;
+
+/// Ask one window's default IME whether it is open, via `WM_IME_CONTROL`.
+/// Returns `None` if the window has no IME or the query times out.
+unsafe fn ime_open_of(hwnd: windows::Win32::Foundation::HWND) -> Option<bool> {
+    if hwnd.0 == 0 {
+        return None;
+    }
+    let ime = ImmGetDefaultIMEWnd(hwnd);
+    if ime.0 == 0 {
+        return None;
+    }
+    let mut result: usize = 0;
+    let ok = SendMessageTimeoutW(
+        ime,
+        WM_IME_CONTROL,
+        WPARAM(IMC_GETOPENSTATUS),
+        LPARAM(0),
+        SMTO_ABORTIFHUNG,
+        100,
+        Some(&mut result as *mut usize),
+    );
+    if ok.0 == 0 {
+        None // timed out or failed
+    } else {
+        Some(result != 0)
+    }
+}
+
+/// Whether the focused control's IME is open (Japanese input mode), or `None`
+/// if it can't be determined. We target the *focus* window of the foreground
+/// thread (not just the top-level window) because that's where the IME context
+/// actually lives; we fall back to the top-level foreground window.
+/// Runs only on the poll thread (never inside the hook) — the underlying
+/// `SendMessage` is blocking, so we use `SendMessageTimeoutW`.
+fn ime_open_status() -> Option<bool> {
+    use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO};
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0 == 0 {
+            return None;
+        }
+        // Resolve the actual focused control of the foreground thread.
+        let tid = GetWindowThreadProcessId(fg, None);
+        let mut gui = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        let focus = if GetGUIThreadInfo(tid, &mut gui).is_ok() && gui.hwndFocus.0 != 0 {
+            gui.hwndFocus
+        } else {
+            fg
+        };
+        ime_open_of(focus).or_else(|| ime_open_of(fg))
+    }
+}
+
+/// Lock the hook state, recovering from a poisoned mutex instead of giving up.
+/// A poisoned lock (a thread panicked while holding it) must never make the
+/// hook fall through to `CallNextHookEx` — that would leak the raw key to the
+/// OS (the "occasional stray 'a'" symptom). The protected state is plain data,
+/// safe to keep using after a panic.
+fn lock_state() -> std::sync::MutexGuard<'static, HookState> {
+    let m = HOOK_STATE.get().expect("hook state set before use");
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 struct HookState {
     matcher: InputMatcher,
     layout: std::sync::Arc<Layout>,
     app_config: AppConfig,
     current_app: String,
+    /// JIS vs US/ANSI, taken from the loaded layout's filename suffix
+    /// (`.jp.txt` = JIS, `.en.txt` = US; see `Layout::keyboard`).
+    keyboard: KeyboardLayout,
 }
 
 pub fn install_and_run_windows_hook() -> JoinHandle<()> {
@@ -40,20 +126,87 @@ pub fn install_and_run_windows_hook() -> JoinHandle<()> {
     // Supports FR-3 per-app profile (app_map) from day one of prototype.
     let app_config = AppConfig::load(Path::new("data/config.json"))
         .unwrap_or_else(|_| AppConfig::fallback());
+    IME_GATING.store(app_config.activate_only_when_ime_on, Ordering::Relaxed);
     let initial_app = get_foreground_app_id();
     let layout = load_layout_for_app(&initial_app, &app_config);
 
     let mut matcher = InputMatcher::default();
     // FR-6: apply configured disable keys (held -> full passthrough).
     matcher.set_disable_keys(app_config.disable_keycodes());
+    if app_config.combo_window_ms > 0 {
+        matcher.set_combo_window_ms(app_config.combo_window_ms);
+    }
+    matcher.set_hold_mode(app_config.hold_mode);
 
+    let keyboard = layout.keyboard;
     let state = HookState {
         matcher,
         layout: std::sync::Arc::new(layout),
         app_config,
         current_app: initial_app,
+        keyboard,
     };
     HOOK_STATE.set(Mutex::new(state)).ok();
+
+    // 同時打鍵 flush timer + IME gate poller. The flush part runs every ~5ms so
+    // a pending solo key is emitted promptly once its combo window elapses. The
+    // IME gate is checked less often (~every 60ms) because `SendMessageW` is
+    // comparatively expensive. Both extract what they need under the lock and
+    // release it before any blocking call (inject / IME query).
+    thread::spawn(|| {
+        let mut tick: u32 = 0;
+        loop {
+            thread::sleep(std::time::Duration::from_millis(5));
+            tick = tick.wrapping_add(1);
+
+            // Flush a due chord: take the output under the lock, inject after.
+            let flush: Option<(OutputSeq, KeyboardLayout)> = {
+                let mut st = lock_state();
+                if st.matcher.has_pending() {
+                    let layout = std::sync::Arc::clone(&st.layout);
+                    let keyboard = st.keyboard;
+                    st.matcher.flush_due(&layout).map(|seq| (seq, keyboard))
+                } else {
+                    None
+                }
+            };
+            if let Some((seq, keyboard)) = flush {
+                inject_output_seq(&seq, keyboard);
+            }
+
+            // IME gate (~60ms): if the layout is configured to be active only
+            // while the IME is ON, bypass remapping whenever the IME is OFF.
+            if tick % 12 == 0 {
+                if IME_GATING.load(Ordering::Relaxed) {
+                    match ime_open_status() {
+                        Some(open) => {
+                            // Log on transitions so the user can verify gating.
+                            let cur = open as i8;
+                            if LAST_IME_LOG.swap(cur, Ordering::Relaxed) != cur {
+                                crate::log::log(if open {
+                                    "IME on -> remap active"
+                                } else {
+                                    "IME off -> remap bypassed (passthrough)"
+                                });
+                            }
+                            // active only while IME ON -> bypass while IME OFF.
+                            lock_state().matcher.set_external_bypass(!open);
+                        }
+                        None => {
+                            // Can't read IME state: log once, leave bypass as-is.
+                            if LAST_IME_LOG.swap(-2, Ordering::Relaxed) != -2 {
+                                crate::log::log("IME state unknown (no IME window / query failed)");
+                            }
+                        }
+                    }
+                } else {
+                    // Gating disabled: never bypass for IME reasons.
+                    LAST_IME_LOG.store(-1, Ordering::Relaxed);
+                    lock_state().matcher.set_external_bypass(false);
+                }
+            }
+        }
+    });
 
     thread::spawn(|| unsafe {
         // Use the guarded version for NFR-4 (catch_unwind around the real proc so a panic in user layout logic cannot crash the hook thread / system).
@@ -95,54 +248,59 @@ unsafe extern "system" fn low_level_proc(n_code: i32, w_param: WPARAM, l_param: 
         return CallNextHookEx(None, n_code, w_param, l_param);
     }
 
-    let code = vk_to_keycode(vk, (flags.0 & 0x01) != 0 /* extended */);
     let mods = current_modifiers_from_vk(vk, is_down); // best effort; real state tracked in matcher too
 
-    let ev = Event {
-        kind: if is_down { EventKind::KeyDown } else { EventKind::KeyUp },
-        code,
-        modifiers: mods,
-        timestamp: kbd.time as u64,
-        held: false, // will be set by matcher based on its pressed
+    // Decide under the lock, but release it *before* injecting: SendInput and
+    // CallNextHookEx must not run while the global mutex is held, or the flush /
+    // IME-poll threads block the hot path and the callback can exceed
+    // LowLevelHooksTimeout — at which point Windows drops the hook and the raw
+    // key leaks to the OS (the "occasional stray 'a'"). We compute the action,
+    // drop the guard, then act.
+    let (action, keyboard) = {
+        let mut st = lock_state();
+
+        // FR-3: per-app profile switch on key event (cheap check + re-query only on change).
+        let fg = get_foreground_app_id();
+        if fg != st.current_app {
+            st.current_app = fg.clone();
+            let new_layout = load_layout_for_app(&fg, &st.app_config);
+            st.matcher.clear(); // safe boundary per NFR-4 (no keys held across switch in practice)
+            st.keyboard = new_layout.keyboard;
+            st.layout = std::sync::Arc::new(new_layout);
+        }
+
+        let code = vk_to_keycode(vk, (flags.0 & 0x01) != 0 /* extended */, st.keyboard);
+        let ev = Event {
+            kind: if is_down { EventKind::KeyDown } else { EventKind::KeyUp },
+            code,
+            modifiers: mods,
+            timestamp: kbd.time as u64,
+            held: false, // will be set by matcher based on its pressed
+        };
+        let held = st.matcher.was_already_pressed(&code);
+        let ev = if held { ev.with_held(true) } else { ev };
+
+        let layout = std::sync::Arc::clone(&st.layout);
+        let keyboard = st.keyboard;
+        let action = st.matcher.process(&ev, &layout);
+        (action, keyboard)
+        // guard dropped here
     };
 
-    // Lock state, let matcher decide (fast path inside hook callback for NFR-1)
-    if let Some(state) = HOOK_STATE.get() {
-        if let Ok(mut st) = state.lock() {
-            // FR-3: per-app profile switch on key event (cheap check + re-query only on change).
-            // Avoids heavy work in hot path; swap only when fg app actually changes.
-            let fg = get_foreground_app_id();
-            if fg != st.current_app {
-                st.current_app = fg.clone();
-                let new_layout = load_layout_for_app(&fg, &st.app_config);
-                st.matcher.clear(); // safe boundary per NFR-4 (no keys held across switch in practice)
-                st.layout = std::sync::Arc::new(new_layout);
-            }
-
-            // Update held flag using our pressed set before processing
-            let held = st.matcher.was_already_pressed(&code);
-            let ev = if held { ev.with_held(true) } else { ev };
-
-            // Clone Arc for immutable layout while holding mutable borrow on matcher only
-            let layout = std::sync::Arc::clone(&st.layout);
-            match st.matcher.process(&ev, &layout) {
-                MatchAction::Emit(seq) => {
-                    // Remap: synthesize and eat the original.
-                    inject_output_seq(&seq);
-                    return LRESULT(1);
-                }
-                MatchAction::Block => {
-                    // Consume the original (e.g. a held layer key) with no output.
-                    return LRESULT(1);
-                }
-                MatchAction::PassThrough => {
-                    return CallNextHookEx(None, n_code, w_param, l_param);
-                }
-            }
+    match action {
+        MatchAction::Emit(seq) => {
+            // Remap: synthesize and eat the original.
+            inject_output_seq(&seq, keyboard);
+            LRESULT(1)
         }
+        MatchAction::EmitThenPass(seq) => {
+            // Flush a pending chord, then let the original key through unchanged.
+            inject_output_seq(&seq, keyboard);
+            CallNextHookEx(None, n_code, w_param, l_param)
+        }
+        MatchAction::Block => LRESULT(1),
+        MatchAction::PassThrough => CallNextHookEx(None, n_code, w_param, l_param),
     }
-
-    CallNextHookEx(None, n_code, w_param, l_param)
 }
 
 // NFR-4 last-resort guard: never panic the hook thread / system hook.
@@ -161,7 +319,19 @@ fn current_modifiers_from_vk(_vk: u32, _is_down: bool) -> Modifiers {
     Modifiers::empty()
 }
 
-fn vk_to_keycode(vk: u32, _extended: bool) -> KeyCode {
+fn vk_to_keycode(vk: u32, _extended: bool, keyboard: KeyboardLayout) -> KeyCode {
+    // JIS-only physical keys: the driver reports these OEM VKs differently
+    // than on a US/ANSI keyboard (@, ^, ¥ and the extra \(ろ) key).
+    if keyboard == KeyboardLayout::Jis {
+        match vk as i32 {
+            0xC0 => return KeyCode::AtSign,   // JIS "@" key (US: Grave)
+            0xDE => return KeyCode::Colon,    // JIS ":" key (US: Quote)
+            0xDC => return KeyCode::Yen,      // JIS "¥" key (US: Backslash)
+            0xBB => return KeyCode::Caret,    // JIS "^" key (US: Equal)
+            0xE2 => return KeyCode::Backslash, // JIS "\ろ" key (no US equivalent)
+            _ => {}
+        }
+    }
     match vk as i32 {
         0x41 => KeyCode::A, 0x42 => KeyCode::B, 0x43 => KeyCode::C, 0x44 => KeyCode::D,
         0x45 => KeyCode::E, 0x46 => KeyCode::F, 0x47 => KeyCode::G, 0x48 => KeyCode::H,
@@ -206,7 +376,7 @@ fn vk_to_keycode(vk: u32, _extended: bool) -> KeyCode {
     }
 }
 
-fn inject_output_seq(seq: &OutputSeq) {
+fn inject_output_seq(seq: &OutputSeq, keyboard: KeyboardLayout) {
     if seq.is_empty() { return; }
 
     let mut inputs: Vec<INPUT> = Vec::with_capacity(seq.len() * 4);
@@ -245,7 +415,7 @@ fn inject_output_seq(seq: &OutputSeq) {
                     inputs.push(make_key_input(mvk, false));
                 }
 
-                let main_vk = keycode_to_vk(*code);
+                let main_vk = keycode_to_vk(*code, keyboard);
                 if main_vk.0 != 0 {
                     inputs.push(make_key_input(main_vk, false));
                     inputs.push(make_key_input(main_vk, true));
@@ -314,7 +484,18 @@ fn make_unicode_input(ch: char, up: bool) -> INPUT {
     i
 }
 
-fn keycode_to_vk(k: KeyCode) -> VIRTUAL_KEY {
+fn keycode_to_vk(k: KeyCode, keyboard: KeyboardLayout) -> VIRTUAL_KEY {
+    // JIS-only symbol keys: only meaningful when a JIS layout is active
+    // (these KeyCodes won't be produced by US-physical-row grids).
+    if keyboard == KeyboardLayout::Jis {
+        match k {
+            KeyCode::AtSign => return VIRTUAL_KEY(0xC0),
+            KeyCode::Colon => return VIRTUAL_KEY(0xDE),
+            KeyCode::Yen => return VIRTUAL_KEY(0xDC),
+            KeyCode::Caret => return VIRTUAL_KEY(0xBB),
+            _ => {}
+        }
+    }
     match k {
         KeyCode::A => VIRTUAL_KEY(0x41), KeyCode::B => VIRTUAL_KEY(0x42), KeyCode::C => VIRTUAL_KEY(0x43),
         KeyCode::D => VIRTUAL_KEY(0x44), KeyCode::E => VIRTUAL_KEY(0x45), KeyCode::F => VIRTUAL_KEY(0x46),
@@ -365,6 +546,8 @@ fn keycode_to_char_fallback(k: KeyCode) -> Option<char> {
 
 /// Resolve layout bytes for a concrete app_id using the provided AppConfig (per-app or default).
 /// Falls back to sample then embedded (NFR-4: never panic, always produce a usable Layout).
+/// The physical keyboard layout (JIS vs US) is determined entirely by the
+/// loaded file's name suffix (`.jp.txt` / `.en.txt`), not the OS locale.
 fn load_layout_for_app(app_id: &str, cfg: &AppConfig) -> Layout {
     let loader = DvorakJLayoutLoader::new();
     let layout_path = cfg.layout_path_for_app(app_id);
@@ -395,6 +578,7 @@ fn load_layout_for_app(app_id: &str, cfg: &AppConfig) -> Layout {
 pub fn reload_layout() {
     let new_cfg = AppConfig::load(Path::new("data/config.json"))
         .unwrap_or_else(|_| AppConfig::fallback());
+    IME_GATING.store(new_cfg.activate_only_when_ime_on, Ordering::Relaxed);
     let app = get_foreground_app_id();
     let new_layout = load_layout_for_app(&app, &new_cfg);
     if let Some(state) = HOOK_STATE.get() {
@@ -402,8 +586,13 @@ pub fn reload_layout() {
             st.matcher.clear();
             // FR-6: re-apply disable keys from the freshly loaded config.
             st.matcher.set_disable_keys(new_cfg.disable_keycodes());
+            if new_cfg.combo_window_ms > 0 {
+                st.matcher.set_combo_window_ms(new_cfg.combo_window_ms);
+            }
+            st.matcher.set_hold_mode(new_cfg.hold_mode);
             st.app_config = new_cfg;
             st.current_app = app;
+            st.keyboard = new_layout.keyboard;
             st.layout = std::sync::Arc::new(new_layout);
             // In real app we would log "layout reloaded"
         }

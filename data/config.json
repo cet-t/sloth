@@ -1,17 +1,17 @@
 {
   "profiles": {
-    "default": {
-      "layout": "data/layouts/samples/toy_simul.txt",
+    "colemak": {
+      "layout": "data/layouts/samples/toy_simul.en.txt",
       "toggles": {
         "enable_sands": true,
         "enable_gestures": false,
         "enable_shortcuts": false
       }
     },
-    "colemak": {
-      "layout": "data/layouts/samples/toy_simul.txt",
+    "default": {
+      "layout": "data/layouts/圧縮版_新下駄配列.txt",
       "toggles": {
-        "enable_sands": false,
+        "enable_sands": true,
         "enable_gestures": false,
         "enable_shortcuts": false
       }
@@ -21,7 +21,10 @@
     "per_app": {},
     "default_profile": "default"
   },
-  "default_layout": "data/layouts/samples/toy_simul.txt",
+  "default_layout": "data/layouts/圧縮版_新下駄配列.txt",
   "disable_keys": [],
-  "enable_log": false
+  "enable_log": false,
+  "activate_only_when_ime_on": true,
+  "combo_window_ms": 60,
+  "hold_mode": true
 }

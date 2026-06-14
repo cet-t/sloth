@@ -1,4 +1,4 @@
-import { Button, CheckBox, LineEdit, ComboBox, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
+import { Button, CheckBox, LineEdit, ComboBox, SpinBox, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
 
 export struct ProfileRow {
     name: string,
@@ -41,6 +41,9 @@ export component AppWindow inherits Window {
     in-out property <string> default_layout;
     in-out property <int> default_profile_index: 0;
     in-out property <bool> enable_log;
+    in-out property <bool> activate_only_when_ime_on;
+    in-out property <int> combo_window_ms;
+    in-out property <bool> hold_mode;
     in-out property <bool> disable_ctrl;
     in-out property <bool> disable_alt;
     in-out property <bool> disable_win;
@@ -133,6 +136,28 @@ export component AppWindow inherits Window {
                                 vertical-stretch: 0;
                                 model: profile_names;
                                 current-index <=> default_profile_index;
+                            }
+                        }
+                        HorizontalBox {
+                            CheckBox {
+                                text: "IMEがオンの時だけ有効にする（オフ時は全パススルー）";
+                                checked <=> activate_only_when_ime_on;
+                            }
+                        }
+                        HorizontalBox {
+                            Text { text: "同時打鍵判定のしきい値 (ms)"; vertical-alignment: center; width: 180px; }
+                            SpinBox {
+                                width: 100px;
+                                height: 32px;
+                                minimum: 1;
+                                maximum: 500;
+                                value <=> combo_window_ms;
+                            }
+                        }
+                        HorizontalBox {
+                            CheckBox {
+                                text: "長押し時に出力をリピートする（ホールド扱い、オフ＝単打扱い）";
+                                checked <=> hold_mode;
                             }
                         }
                     }

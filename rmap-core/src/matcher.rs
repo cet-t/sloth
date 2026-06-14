@@ -64,6 +64,14 @@ pub struct InputMatcher {
     /// the layout is configured to be active only while the IME is OFF. While
     /// true everything passes through, exactly like `suspended`.
     external_bypass: bool,
+    /// When true, a solo key resolved via `flush_due` (timed out alone, past
+    /// `combo_window`) keeps repeating its resolved output for as long as the
+    /// key is physically held (OS auto-repeat), like a normal held key
+    /// ("ホールド扱い"). When false (default), it is emitted once and further
+    /// auto-repeat events are swallowed ("単打扱い").
+    hold_mode: bool,
+    /// Keys currently repeating their resolved output (see `hold_mode`).
+    repeating: std::collections::HashMap<KeyCode, OutputSeq>,
 }
 
 impl Default for InputMatcher {
@@ -78,6 +86,8 @@ impl Default for InputMatcher {
             disable_keys: HashSet::new(),
             suspended: false,
             external_bypass: false,
+            hold_mode: false,
+            repeating: std::collections::HashMap::new(),
         }
     }
 }
@@ -113,6 +123,11 @@ impl InputMatcher {
         // OS auto-repeat of an already-held key: never re-enter the engine.
         // Re-block consumed keys; let others repeat through.
         if was_pressed || event.held {
+            // Hold mode: a solo key resolved by flush_due keeps repeating its
+            // resolved output for as long as it's physically held.
+            if let Some(seq) = self.repeating.get(&k).cloned() {
+                return MatchAction::Emit(seq);
+            }
             if self.blocked.contains(&k) || layout.sustained_triggers.contains(&k) {
                 return MatchAction::Block;
             }
@@ -251,7 +266,9 @@ impl InputMatcher {
         }
 
         // Content key-up: block it iff its key-down was consumed.
-        if self.blocked.remove(&k) {
+        let was_blocked = self.blocked.remove(&k);
+        self.repeating.remove(&k);
+        if was_blocked {
             MatchAction::Block
         } else {
             MatchAction::PassThrough
@@ -272,6 +289,20 @@ impl InputMatcher {
         if !due || self.pending.is_empty() {
             return None;
         }
+
+        // Hold mode: a single timed-out key keeps repeating its resolved
+        // output for as long as it's physically held (OS auto-repeat).
+        if self.hold_mode && self.pending.len() == 1 {
+            let k = self.pending[0];
+            let out = self.resolve_chord(&self.pending.clone(), layout);
+            self.clear_pending();
+            if out.is_empty() {
+                return None;
+            }
+            self.repeating.insert(k, out.clone());
+            return Some(out);
+        }
+
         let out = self.resolve_chord(&self.pending.clone(), layout);
         self.clear_pending();
         if out.is_empty() { None } else { Some(out) }
@@ -351,6 +382,9 @@ impl InputMatcher {
             .or_else(|| layout.layer_taps.get(&k).cloned())
         {
             self.blocked.insert(k);
+            if self.hold_mode {
+                self.repeating.insert(k, seq.clone());
+            }
             MatchAction::Emit(seq)
         } else {
             MatchAction::PassThrough
@@ -430,6 +464,17 @@ impl InputMatcher {
         self.disable_keys = keys.into_iter().collect();
     }
 
+    /// Configurable simultaneous-press (chord) detection window.
+    pub fn set_combo_window_ms(&mut self, ms: u64) {
+        self.combo_window = Duration::from_millis(ms);
+    }
+
+    /// Whether a solo key resolved by `flush_due` repeats its output while
+    /// held ("ホールド扱い") vs emitting once ("単打扱い", default).
+    pub fn set_hold_mode(&mut self, hold_mode: bool) {
+        self.hold_mode = hold_mode;
+    }
+
     pub fn set_suspended(&mut self, suspended: bool) {
         self.suspended = suspended;
     }
@@ -452,6 +497,7 @@ impl InputMatcher {
         self.pressed.clear();
         self.layer_had_partner.clear();
         self.blocked.clear();
+        self.repeating.clear();
         self.clear_pending();
     }
 

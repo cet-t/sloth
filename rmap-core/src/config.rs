@@ -20,6 +20,24 @@ pub struct AppConfig {
     /// to the daemon executable. Default off.
     #[serde(default)]
     pub enable_log: bool,
+    /// When true, remapping is active only while the IME is ON (Japanese
+    /// conversion mode); while the IME is OFF (direct alphanumeric) every key
+    /// passes through. Default false = always active regardless of IME state.
+    #[serde(default, alias = "activate_only_when_ime_off")]
+    pub activate_only_when_ime_on: bool,
+    /// Simultaneous-press (chord) detection window, in milliseconds. Keys
+    /// pressed within this window of each other are treated as a chord
+    /// rather than separate taps. Default 40ms (matches the matcher's
+    /// built-in default) when unset or 0.
+    #[serde(default)]
+    pub combo_window_ms: u64,
+    /// When true, a 同時打鍵 key resolved as a solo tap (no partner within
+    /// `combo_window_ms`) keeps repeating its output for as long as it's
+    /// physically held, like a normal key ("ホールド扱い"). When false
+    /// (default), it is emitted once regardless of how long it's held
+    /// ("単打扱い").
+    #[serde(default)]
+    pub hold_mode: bool,
 }
 
 /// Expand a config key name to the concrete `KeyCode`s it covers. Generic
@@ -90,6 +108,9 @@ impl AppConfig {
             default_layout: "data/layouts/samples/toy_simul.txt".to_string(),
             disable_keys: Vec::new(),
             enable_log: false,
+            activate_only_when_ime_on: false,
+            combo_window_ms: 0,
+            hold_mode: false,
         }
     }
 
