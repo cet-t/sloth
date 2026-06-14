@@ -20,7 +20,7 @@ component CategoryItem inherits Rectangle {
         text: label;
         x: 10px;
         vertical-alignment: center;
-        color: selected ? white : black;
+        color: white;
     }
 
     TouchArea {
@@ -118,15 +118,19 @@ export component AppWindow inherits Window {
             ScrollView {
                 VerticalBox {
                     if category_index == 0 : VerticalBox {
-                        Text { text: "全般"; font-weight: 700; }
+                        spacing: 4px;
+                        Text { text: "全般"; font-weight: 700; height: 24px; vertical-stretch: 0; }
+                        Rectangle { height: 1px; background: #c0c0c0; vertical-stretch: 0; }
                         HorizontalBox {
-                            Text { text: "デフォルトレイアウト:"; vertical-alignment: center; }
-                            LineEdit { text <=> default_layout; }
-                            Button { text: "📁"; clicked => { browse_default_layout(); } }
+                            Text { text: "デフォルトレイアウト"; vertical-alignment: center; width: 140px; }
+                            LineEdit { text <=> default_layout; horizontal-stretch: 1; }
+                            Button { text: "📁"; width: 40px; height: 32px; horizontal-stretch: 0; clicked => { browse_default_layout(); } }
                         }
                         HorizontalBox {
-                            Text { text: "デフォルトプロファイル:"; vertical-alignment: center; }
+                            Text { text: "デフォルトプロファイル"; vertical-alignment: center; width: 140px; }
                             ComboBox {
+                                height: 32px;
+                                vertical-stretch: 0;
                                 model: profile_names;
                                 current-index <=> default_profile_index;
                             }
@@ -134,8 +138,10 @@ export component AppWindow inherits Window {
                     }
 
                     if category_index == 1 : VerticalBox {
-                        Text { text: "一時無効化キー（押している間は全パススルー）"; font-weight: 700; }
-                        HorizontalBox {
+                        spacing: 4px;
+                        Text { text: "一時無効化キー（押している間は全パススルー）"; font-weight: 700; height: 24px; vertical-stretch: 0; }
+                        Rectangle { height: 1px; background: #c0c0c0; vertical-stretch: 0; }
+                        VerticalBox {
                             CheckBox { text: "Ctrl"; checked <=> disable_ctrl; }
                             CheckBox { text: "Alt"; checked <=> disable_alt; }
                             CheckBox { text: "Win"; checked <=> disable_win; }
@@ -144,26 +150,37 @@ export component AppWindow inherits Window {
                     }
 
                     if category_index == 2 : VerticalBox {
-                        Text { text: "ログ"; font-weight: 700; }
-                        CheckBox { text: "ログを有効にする (実行ファイルと同じフォルダの ./log に出力)"; checked <=> enable_log; }
+                        spacing: 4px;
+                        Text { text: "ログ"; font-weight: 700; height: 24px; vertical-stretch: 0; }
+                        Rectangle { height: 1px; background: #c0c0c0; vertical-stretch: 0; }
+                        HorizontalBox {
+                            CheckBox { text: "ログを有効にする (実行ファイルと同じフォルダの ./log に出力)"; checked <=> enable_log; }
+                        }
                     }
 
                     if category_index == 3 : VerticalBox {
-                        Text { text: "プロファイル"; font-weight: 700; }
-                        ComboBox {
-                            model: profile_names;
-                            current-index <=> current_profile_index;
+                        spacing: 4px;
+                        Text { text: "プロファイル"; font-weight: 700; height: 24px; vertical-stretch: 0; }
+                        Rectangle { height: 1px; background: #c0c0c0; vertical-stretch: 0; }
+                        HorizontalBox {
+                            ComboBox {
+                                height: 32px;
+                                vertical-stretch: 0;
+                                model: profile_names;
+                                current-index <=> current_profile_index;
+                            }
                         }
                         if profiles.length > 0 && current_profile_index >= 0 : VerticalBox {
                             HorizontalBox {
-                                Text { text: "レイアウト:"; vertical-alignment: center; }
+                                Text { text: "レイアウト"; vertical-alignment: center; width: 140px; }
                                 LineEdit {
                                     text: profiles[current_profile_index].layout;
+                                    horizontal-stretch: 1;
                                     edited(text) => { profile_layout_edited(text); }
                                 }
-                                Button { text: "📁"; clicked => { browse_profile_layout(); } }
+                                Button { text: "📁"; width: 40px; height: 32px; horizontal-stretch: 0; clicked => { browse_profile_layout(); } }
                             }
-                            HorizontalBox {
+                            VerticalBox {
                                 CheckBox {
                                     text: "SandS";
                                     checked: profiles[current_profile_index].sands;
@@ -185,7 +202,9 @@ export component AppWindow inherits Window {
 
                     if category_index == 4 : VerticalBox {
                         vertical-stretch: 0;
-                        Text { text: "デーモン操作"; font-weight: 700; }
+                        spacing: 4px;
+                        Text { text: "デーモン操作"; font-weight: 700; height: 24px; vertical-stretch: 0; }
+                        Rectangle { height: 1px; background: #c0c0c0; vertical-stretch: 0; }
                         HorizontalBox {
                             vertical-stretch: 0;
                             alignment: start;
@@ -212,12 +231,12 @@ export component AppWindow inherits Window {
                     padding: 0px;
                     spacing: 2px;
                     alignment: start;
-                    Text { text: "状態: " + running_status_text; wrap: word-wrap; }
-                    Text { text: "プロファイル: " + current_profile_text; wrap: word-wrap; }
-                    Text { text: "レイアウト: " + current_layout_text; wrap: word-wrap; }
+                    Text { text: "状態: " + running_status_text; wrap: char-wrap; }
+                    Text { text: "プロファイル: " + current_profile_text; wrap: char-wrap; }
+                    Text { text: "レイアウト: " + current_layout_text; wrap: char-wrap; }
                 }
                 Text { text: status_text; vertical-alignment: center; horizontal-stretch: 1; }
-                Button { text: "保存"; clicked => { save(); } }
+                Button { text: "保存"; width: 80px; height: 32px; clicked => { save(); } }
             }
         }
     }
