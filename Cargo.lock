@@ -4617,6 +4617,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "raw-window-handle",
  "rfd",
  "rmap-core",
  "serde_json",

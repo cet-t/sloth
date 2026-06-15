@@ -6,8 +6,8 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "NYSL-0.9982"
-authors = ["rmap contributors"]
-repository = "https://github.com/your-org/rmap" # placeholder
+authors = ["cet-t"]
+repository = "https://github.com/cet-t/rmap"
 
 [workspace.dependencies]
 # Core shared deps (add as needed)

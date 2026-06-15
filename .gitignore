@@ -29,3 +29,4 @@ build.bat
 *.so
 *.app
 
+token-optimizer/

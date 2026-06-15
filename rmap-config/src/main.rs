@@ -99,16 +99,74 @@ fn focus_existing_window() -> bool {
 
 const CONFIG_PATH: &str = "data/config.json";
 
-/// Pick a layout file via a native file dialog, starting in `data/layouts` if it exists.
-fn pick_layout_file() -> Option<String> {
-    let mut dialog = rfd::FileDialog::new().add_filter("Layout", &["txt"]);
+/// A bare HWND wrapper so the native file dialog can be parented (owned) by our
+/// settings window. Without an owner the dialog opens *behind* our topmost
+/// window and can't be interacted with.
+#[cfg(windows)]
+struct HwndParent(std::num::NonZeroIsize);
+
+#[cfg(windows)]
+impl raw_window_handle::HasWindowHandle for HwndParent {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        let handle = raw_window_handle::Win32WindowHandle::new(self.0);
+        // SAFETY: the HWND outlives the short-lived dialog call below.
+        Ok(unsafe {
+            raw_window_handle::WindowHandle::borrow_raw(raw_window_handle::RawWindowHandle::Win32(
+                handle,
+            ))
+        })
+    }
+}
+
+#[cfg(windows)]
+impl raw_window_handle::HasDisplayHandle for HwndParent {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        let handle = raw_window_handle::WindowsDisplayHandle::new();
+        Ok(unsafe {
+            raw_window_handle::DisplayHandle::borrow_raw(raw_window_handle::RawDisplayHandle::Windows(
+                handle,
+            ))
+        })
+    }
+}
+
+/// Find our settings window's HWND so the file dialog can be parented to it.
+#[cfg(windows)]
+fn settings_window_parent() -> Option<HwndParent> {
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
+    let title: Vec<u16> = "rmap 設定"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let hwnd = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) };
+    std::num::NonZeroIsize::new(hwnd.0).map(HwndParent)
+}
+
+/// Pick a layout file via the native file dialog asynchronously, starting in
+/// `data/layouts` if it exists. Async (driven by `slint::spawn_local`) so the
+/// dialog never blocks the UI event loop — a synchronous dialog froze the
+/// window (blank, no repaint) and fought the event loop. On Windows the dialog
+/// is parented to the settings window so it isn't trapped behind our topmost
+/// window.
+async fn pick_layout_file_async() -> Option<String> {
+    let mut dialog = rfd::AsyncFileDialog::new().add_filter("Layout", &["txt"]);
     let start_dir = Path::new("data/layouts");
     if start_dir.exists() {
         dialog = dialog.set_directory(start_dir);
     }
+    #[cfg(windows)]
+    if let Some(parent) = settings_window_parent() {
+        dialog = dialog.set_parent(&parent);
+    }
     dialog
         .pick_file()
-        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .await
+        .map(|f| f.path().to_string_lossy().replace('\\', "/"))
 }
 
 fn run_settings_window() -> Result<()> {
@@ -119,8 +177,25 @@ fn run_settings_window() -> Result<()> {
     window.set_default_layout(cfg.default_layout.clone().into());
     window.set_enable_log(cfg.enable_log);
     window.set_activate_only_when_ime_on(cfg.activate_only_when_ime_on);
+    window.set_ime_off_layout(cfg.ime_off_layout.clone().into());
+    let direct_input_key_index = match cfg.direct_input_key.trim().to_lowercase().as_str() {
+        "shift" | "lshift" => 1,
+        "muhenkan" => 2,
+        "henkan" => 3,
+        "capslock" | "caps" => 4,
+        _ => 0,
+    };
+    window.set_direct_input_key_index(direct_input_key_index);
+    let sands_mode_index = match cfg.direct_input_mode.trim().to_lowercase().as_str() {
+        "raw" => 1,
+        "ime_off" => 2,
+        _ => 0,
+    };
+    window.set_sands_mode_index(sands_mode_index);
     window.set_combo_window_ms(if cfg.combo_window_ms > 0 { cfg.combo_window_ms as i32 } else { 40 });
     window.set_hold_mode(cfg.hold_mode);
+    window.set_enable_sands_ime_on(cfg.enable_sands_ime_on);
+    window.set_enable_sands_ime_off(cfg.enable_sands_ime_off);
 
     let lower_disable: Vec<String> = cfg
         .disable_keys
@@ -190,10 +265,27 @@ fn run_settings_window() -> Result<()> {
     // 設定 -> デフォルトレイアウトの参照ファイルを選択ダイアログで指定する。
     let window_weak = window.as_weak();
     window.on_browse_default_layout(move || {
-        let window = window_weak.unwrap();
-        if let Some(path) = pick_layout_file() {
-            window.set_default_layout(path.into());
-        }
+        let window_weak = window_weak.clone();
+        let _ = slint::spawn_local(async move {
+            if let Some(path) = pick_layout_file_async().await {
+                if let Some(window) = window_weak.upgrade() {
+                    window.set_default_layout(path.into());
+                }
+            }
+        });
+    });
+
+    // IMEオフ時のレイアウトファイルを選択ダイアログで指定する。
+    let window_weak = window.as_weak();
+    window.on_browse_ime_off_layout(move || {
+        let window_weak = window_weak.clone();
+        let _ = slint::spawn_local(async move {
+            if let Some(path) = pick_layout_file_async().await {
+                if let Some(window) = window_weak.upgrade() {
+                    window.set_ime_off_layout(path.into());
+                }
+            }
+        });
     });
 
     // 選択中プロファイルのレイアウトファイルを選択ダイアログで指定する。
@@ -206,12 +298,15 @@ fn run_settings_window() -> Result<()> {
             return;
         }
         let idx = idx as usize;
-        if let Some(path) = pick_layout_file() {
-            if let Some(mut row) = model.row_data(idx) {
-                row.layout = path.into();
-                model.set_row_data(idx, row);
+        let model = model.clone();
+        let _ = slint::spawn_local(async move {
+            if let Some(path) = pick_layout_file_async().await {
+                if let Some(mut row) = model.row_data(idx) {
+                    row.layout = path.into();
+                    model.set_row_data(idx, row);
+                }
             }
-        }
+        });
     });
 
     // 選択中プロファイルのレイアウトを直接入力で編集する。
@@ -316,8 +411,23 @@ fn run_settings_window() -> Result<()> {
         }
         base_cfg.enable_log = window.get_enable_log();
         base_cfg.activate_only_when_ime_on = window.get_activate_only_when_ime_on();
+        base_cfg.ime_off_layout = window.get_ime_off_layout().to_string();
+        base_cfg.direct_input_key = match window.get_direct_input_key_index() {
+            1 => "shift",
+            2 => "muhenkan",
+            3 => "henkan",
+            4 => "capslock",
+            _ => "",
+        }.to_string();
+        base_cfg.direct_input_mode = match window.get_sands_mode_index() {
+            1 => "raw",
+            2 => "ime_off",
+            _ => "off",
+        }.to_string();
         base_cfg.combo_window_ms = window.get_combo_window_ms().max(1) as u64;
         base_cfg.hold_mode = window.get_hold_mode();
+        base_cfg.enable_sands_ime_on = window.get_enable_sands_ime_on();
+        base_cfg.enable_sands_ime_off = window.get_enable_sands_ime_off();
 
         let mut disable_keys = custom_disable_keys.clone();
         if window.get_disable_ctrl() {

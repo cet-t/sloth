@@ -161,6 +161,67 @@ fn ctrl_held_bypasses() {
     assert_eq!(m.process(&up(KeyCode::CtrlL), &layout), MatchAction::PassThrough);
 }
 
+/// 新下駄: this layout declares no `-shift[...]` block, so LShift is neither a
+/// combo key nor a sustained trigger — it must pass through untouched (the
+/// matcher never reacts to it at all).
+#[test]
+fn shift_passes_through_when_layout_has_no_shift_block() {
+    let layout = load("data/layouts/圧縮版_新下駄配列.txt");
+    assert!(!layout.sustained_triggers.contains(&KeyCode::ShiftL));
+    assert!(!layout.combo_keys.contains(&KeyCode::ShiftL));
+    assert!(!layout.single_map.contains_key(&KeyCode::ShiftL));
+
+    let mut m = InputMatcher::default();
+    assert_eq!(m.process(&down(KeyCode::ShiftL), &layout), MatchAction::PassThrough);
+    assert_eq!(m.process(&up(KeyCode::ShiftL), &layout), MatchAction::PassThrough);
+}
+
+/// Built-in SandS (Space and Shift), layout-independent: 新下駄 declares no
+/// `-option-input` SandS layer, yet Space must still tap -> space and
+/// hold + key -> Shift+key. This is the behaviour the user reported missing.
+#[test]
+fn builtin_sands_space_and_shift() {
+    let layout = load("data/layouts/圧縮版_新下駄配列.txt");
+    // Precondition: the layout itself declares no Space SandS layer.
+    assert!(!layout.sustained_triggers.contains(&KeyCode::Space));
+
+    let mut m = InputMatcher::default();
+
+    // Tap Space: down is held (Block), release with no partner emits a Space.
+    assert_eq!(m.process(&down(KeyCode::Space), &layout), MatchAction::Block);
+    let tap = emit(m.process(&up(KeyCode::Space), &layout));
+    assert_eq!(
+        tap,
+        vec![OutputToken::Key { code: KeyCode::Space, mods: Modifiers::empty() }],
+        "tapping Space alone must emit a Space"
+    );
+
+    // Hold Space + Q -> Shift+Q (capital), regardless of any kana mapping.
+    assert_eq!(m.process(&down(KeyCode::Space), &layout), MatchAction::Block);
+    let q = emit(m.process(&down(KeyCode::Q), &layout));
+    assert_eq!(
+        q,
+        vec![OutputToken::Key { code: KeyCode::Q, mods: Modifiers::SHIFT }],
+        "Space held + Q must emit Shift+Q"
+    );
+    assert_eq!(m.process(&up(KeyCode::Q), &layout), MatchAction::Block);
+    // Space had a partner -> no space emitted on its release.
+    assert_eq!(m.process(&up(KeyCode::Space), &layout), MatchAction::Block);
+}
+
+/// When SandS is disabled (per-IME-state toggle off), the built-in Space role
+/// is inert: Space behaves as an ordinary unmapped key (no tap/hold magic).
+#[test]
+fn builtin_sands_disabled_space_is_ordinary() {
+    let layout = load("data/layouts/圧縮版_新下駄配列.txt");
+    let mut m = InputMatcher::default();
+    m.set_sands_enabled(false);
+
+    // Space is unmapped & not a combo key in 新下駄 -> passes straight through.
+    assert_eq!(m.process(&down(KeyCode::Space), &layout), MatchAction::PassThrough);
+    assert_eq!(m.process(&up(KeyCode::Space), &layout), MatchAction::PassThrough);
+}
+
 /// FR-8: suspend -> passthrough; resume -> remapping restored.
 #[test]
 fn suspend_toggle() {

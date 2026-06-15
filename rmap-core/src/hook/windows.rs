@@ -3,6 +3,7 @@
 //! eat original on remap, pass injected events, low latency decision inside callback.
 
 use crate::{Event, EventKind, KeyCode, KeyboardLayout, Modifiers, OutputSeq, OutputToken, SpecialKey, InputMatcher, MatchAction, layout::Layout, DvorakJLayoutLoader, config::AppConfig, loader::LayoutLoader};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -39,6 +40,30 @@ static IME_GATING: AtomicBool = AtomicBool::new(false);
 /// Last IME open state we logged, so transitions are logged once (not every
 /// poll). -1 = unknown, 0 = closed/off, 1 = open/on.
 static LAST_IME_LOG: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
+
+/// SandS direct-input mode (`AppConfig::direct_input_mode`): what holding
+/// `direct_input_key` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum DirectInputMode {
+    /// `direct_input_key` is inert.
+    #[default]
+    Off,
+    /// While held, fully bypass remapping (raw physical-keyboard input).
+    Raw,
+    /// While held, switch the active layout to `ime_off_layout` (falls back
+    /// to `Raw` if `ime_off_layout` is unset).
+    ImeOff,
+}
+
+impl DirectInputMode {
+    fn from_config_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "raw" => DirectInputMode::Raw,
+            "ime_off" => DirectInputMode::ImeOff,
+            _ => DirectInputMode::Off,
+        }
+    }
+}
 
 /// `WM_IME_CONTROL` / `IMC_GETOPENSTATUS`: query whether the IME is open
 /// (Japanese conversion on). Not exported by the `windows` crate, so spelled
@@ -101,6 +126,61 @@ fn ime_open_status() -> Option<bool> {
     }
 }
 
+/// Recompute which layout should be active and whether remapping should be
+/// bypassed, based on two independent inputs:
+/// - `ime_open`: whether the IME is currently ON (irrelevant if gating is
+///   disabled, in which case we always treat it as ON).
+/// - `direct_input_active`: whether the configured `direct_input_key` is
+///   currently held.
+///
+/// Either "IME is OFF" (when gating is enabled) or "direct-input key held"
+/// wants the `ime_off_layout` (if configured) active; if neither wants it,
+/// `normal_layout` is active. If `ime_off_layout` is unset, either condition
+/// instead falls back to a full bypass (raw passthrough), preserving the
+/// original behaviours of both features. No-op if nothing changed.
+fn recompute_layout_locked(st: &mut HookState) {
+    let gating = IME_GATING.load(Ordering::Relaxed);
+    let ime_open = if gating { st.ime_open } else { true };
+
+    // IME-off gating: prefer ime_off_layout while the IME is OFF, else bypass.
+    let ime_wants_off_layout = !ime_open && st.ime_off_layout.is_some();
+    let ime_wants_bypass = !ime_open && st.ime_off_layout.is_none();
+
+    // SandS direct-input key held: `direct_input_mode` decides what happens.
+    // `ImeOff` switches to ime_off_layout (falling back to `Raw`/bypass if
+    // unset); `Raw` fully bypasses; `Off` does nothing.
+    let direct_wants_off_layout = st.direct_input_active
+        && st.direct_input_mode == DirectInputMode::ImeOff
+        && st.ime_off_layout.is_some();
+    let direct_wants_bypass = st.direct_input_active
+        && match st.direct_input_mode {
+            DirectInputMode::Raw => true,
+            DirectInputMode::ImeOff => st.ime_off_layout.is_none(),
+            DirectInputMode::Off => false,
+        };
+
+    let want_off = ime_wants_off_layout || direct_wants_off_layout;
+    if want_off != st.using_ime_off_layout {
+        st.using_ime_off_layout = want_off;
+        st.layout = if want_off {
+            st.ime_off_layout.clone().unwrap()
+        } else {
+            st.normal_layout.clone()
+        };
+        st.keyboard = st.layout.keyboard;
+        st.matcher.clear();
+    }
+    let bypass = ime_wants_bypass || direct_wants_bypass;
+    st.matcher.set_external_bypass(bypass);
+
+    let sands_enabled = if ime_open {
+        st.app_config.enable_sands_ime_on
+    } else {
+        st.app_config.enable_sands_ime_off
+    };
+    st.matcher.set_sands_enabled(sands_enabled);
+}
+
 /// Lock the hook state, recovering from a poisoned mutex instead of giving up.
 /// A poisoned lock (a thread panicked while holding it) must never make the
 /// hook fall through to `CallNextHookEx` — that would leak the raw key to the
@@ -113,12 +193,49 @@ fn lock_state() -> std::sync::MutexGuard<'static, HookState> {
 
 struct HookState {
     matcher: InputMatcher,
+    /// Layout currently in effect (mirrors either `normal_layout` or
+    /// `ime_off_layout`, whichever IME state we're in).
     layout: std::sync::Arc<Layout>,
+    /// Layout resolved for the current foreground app + profile, used while
+    /// the IME is ON (or always, if `ime_off_layout` is unset).
+    normal_layout: std::sync::Arc<Layout>,
+    /// Optional alternate layout used while the IME is OFF
+    /// (`AppConfig::ime_off_layout`), loaded once at install/reload.
+    ime_off_layout: Option<std::sync::Arc<Layout>>,
+    /// Whether `layout` currently points at `ime_off_layout` (vs `normal_layout`).
+    using_ime_off_layout: bool,
+    /// Last-known IME open state, as reported by the poll thread. Only
+    /// meaningful while `IME_GATING` is set; otherwise treated as `true`.
+    ime_open: bool,
+    /// Configured "direct input" key(s) (`AppConfig::direct_input_key`):
+    /// while any of these is held and `direct_input_mode != Off`, prefer
+    /// `ime_off_layout` (or bypass, if unset / mode is `Raw`) even while the
+    /// IME is ON.
+    direct_input_keys: HashSet<KeyCode>,
+    /// Whether a configured direct-input key is currently held.
+    direct_input_active: bool,
+    /// SandS direct-input mode (`AppConfig::direct_input_mode`).
+    direct_input_mode: DirectInputMode,
     app_config: AppConfig,
     current_app: String,
     /// JIS vs US/ANSI, taken from the loaded layout's filename suffix
     /// (`.jp.txt` = JIS, `.en.txt` = US; see `Layout::keyboard`).
     keyboard: KeyboardLayout,
+}
+
+/// Load an alternate layout file from a config-supplied path (FR: IME-off
+/// layout). Empty path or load failure -> `None` (NFR-4: never panic, just
+/// keep the old behaviour for that path).
+fn load_optional_layout(path: &str) -> Option<std::sync::Arc<Layout>> {
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let loader = DvorakJLayoutLoader::new();
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| loader.load(&bytes, path).ok())
+        .map(std::sync::Arc::new)
 }
 
 pub fn install_and_run_windows_hook() -> JoinHandle<()> {
@@ -128,7 +245,8 @@ pub fn install_and_run_windows_hook() -> JoinHandle<()> {
         .unwrap_or_else(|_| AppConfig::fallback());
     IME_GATING.store(app_config.activate_only_when_ime_on, Ordering::Relaxed);
     let initial_app = get_foreground_app_id();
-    let layout = load_layout_for_app(&initial_app, &app_config);
+    let normal_layout = std::sync::Arc::new(load_layout_for_app(&initial_app, &app_config));
+    let ime_off_layout = load_optional_layout(&app_config.ime_off_layout);
 
     let mut matcher = InputMatcher::default();
     // FR-6: apply configured disable keys (held -> full passthrough).
@@ -137,16 +255,28 @@ pub fn install_and_run_windows_hook() -> JoinHandle<()> {
         matcher.set_combo_window_ms(app_config.combo_window_ms);
     }
     matcher.set_hold_mode(app_config.hold_mode);
+    let direct_input_keys: HashSet<KeyCode> =
+        crate::config::keycodes_from_config_name(&app_config.direct_input_key).into_iter().collect();
+    let direct_input_mode = DirectInputMode::from_config_str(&app_config.direct_input_mode);
 
+    let layout = normal_layout.clone();
     let keyboard = layout.keyboard;
     let state = HookState {
         matcher,
-        layout: std::sync::Arc::new(layout),
+        layout,
+        normal_layout,
+        ime_off_layout,
+        using_ime_off_layout: false,
+        ime_open: true,
+        direct_input_keys,
+        direct_input_active: false,
+        direct_input_mode,
         app_config,
         current_app: initial_app,
         keyboard,
     };
     HOOK_STATE.set(Mutex::new(state)).ok();
+    recompute_layout_locked(&mut lock_state());
 
     // 同時打鍵 flush timer + IME gate poller. The flush part runs every ~5ms so
     // a pending solo key is emitted promptly once its combo window elapses. The
@@ -189,8 +319,11 @@ pub fn install_and_run_windows_hook() -> JoinHandle<()> {
                                     "IME off -> remap bypassed (passthrough)"
                                 });
                             }
-                            // active only while IME ON -> bypass while IME OFF.
-                            lock_state().matcher.set_external_bypass(!open);
+                            // active only while IME ON -> swap layout (or bypass
+                            // if no IME-off layout is configured) while IME OFF.
+                            let mut st = lock_state();
+                            st.ime_open = open;
+                            recompute_layout_locked(&mut st);
                         }
                         None => {
                             // Can't read IME state: log once, leave bypass as-is.
@@ -200,9 +333,12 @@ pub fn install_and_run_windows_hook() -> JoinHandle<()> {
                         }
                     }
                 } else {
-                    // Gating disabled: never bypass for IME reasons.
+                    // Gating disabled: never bypass for IME reasons, always the
+                    // normal (per-app) layout.
                     LAST_IME_LOG.store(-1, Ordering::Relaxed);
-                    lock_state().matcher.set_external_bypass(false);
+                    let mut st = lock_state();
+                    st.ime_open = true;
+                    recompute_layout_locked(&mut st);
                 }
             }
         }
@@ -263,13 +399,34 @@ unsafe extern "system" fn low_level_proc(n_code: i32, w_param: WPARAM, l_param: 
         let fg = get_foreground_app_id();
         if fg != st.current_app {
             st.current_app = fg.clone();
-            let new_layout = load_layout_for_app(&fg, &st.app_config);
+            let new_layout = std::sync::Arc::new(load_layout_for_app(&fg, &st.app_config));
             st.matcher.clear(); // safe boundary per NFR-4 (no keys held across switch in practice)
-            st.keyboard = new_layout.keyboard;
-            st.layout = std::sync::Arc::new(new_layout);
+            st.normal_layout = new_layout;
+            if !st.using_ime_off_layout {
+                st.layout = st.normal_layout.clone();
+                st.keyboard = st.layout.keyboard;
+            }
         }
 
         let code = vk_to_keycode(vk, (flags.0 & 0x01) != 0 /* extended */, st.keyboard);
+        let held = st.matcher.was_already_pressed(&code);
+
+        // Direct-input key (AppConfig::direct_input_key): while held, prefer
+        // `ime_off_layout` (or bypass, if unset) even though the IME is ON.
+        // Toggle only on the real down/up edge (ignore OS auto-repeat).
+        if st.direct_input_mode != DirectInputMode::Off
+            && !st.direct_input_keys.is_empty()
+            && st.direct_input_keys.contains(&code)
+        {
+            if is_down && !held {
+                st.direct_input_active = true;
+                recompute_layout_locked(&mut st);
+            } else if is_up {
+                st.direct_input_active = false;
+                recompute_layout_locked(&mut st);
+            }
+        }
+
         let ev = Event {
             kind: if is_down { EventKind::KeyDown } else { EventKind::KeyUp },
             code,
@@ -277,7 +434,6 @@ unsafe extern "system" fn low_level_proc(n_code: i32, w_param: WPARAM, l_param: 
             timestamp: kbd.time as u64,
             held: false, // will be set by matcher based on its pressed
         };
-        let held = st.matcher.was_already_pressed(&code);
         let ev = if held { ev.with_held(true) } else { ev };
 
         let layout = std::sync::Arc::clone(&st.layout);
@@ -580,20 +736,28 @@ pub fn reload_layout() {
         .unwrap_or_else(|_| AppConfig::fallback());
     IME_GATING.store(new_cfg.activate_only_when_ime_on, Ordering::Relaxed);
     let app = get_foreground_app_id();
-    let new_layout = load_layout_for_app(&app, &new_cfg);
+    let new_layout = std::sync::Arc::new(load_layout_for_app(&app, &new_cfg));
+    let new_ime_off_layout = load_optional_layout(&new_cfg.ime_off_layout);
     if let Some(state) = HOOK_STATE.get() {
         if let Ok(mut st) = state.lock() {
             st.matcher.clear();
             // FR-6: re-apply disable keys from the freshly loaded config.
             st.matcher.set_disable_keys(new_cfg.disable_keycodes());
+            st.direct_input_keys = crate::config::keycodes_from_config_name(&new_cfg.direct_input_key).into_iter().collect();
+            st.direct_input_mode = DirectInputMode::from_config_str(&new_cfg.direct_input_mode);
             if new_cfg.combo_window_ms > 0 {
                 st.matcher.set_combo_window_ms(new_cfg.combo_window_ms);
             }
             st.matcher.set_hold_mode(new_cfg.hold_mode);
             st.app_config = new_cfg;
             st.current_app = app;
-            st.keyboard = new_layout.keyboard;
-            st.layout = std::sync::Arc::new(new_layout);
+            st.normal_layout = new_layout;
+            st.ime_off_layout = new_ime_off_layout;
+            st.using_ime_off_layout = false;
+            st.direct_input_active = false;
+            st.layout = st.normal_layout.clone();
+            st.keyboard = st.layout.keyboard;
+            recompute_layout_locked(&mut st);
             // In real app we would log "layout reloaded"
         }
     }

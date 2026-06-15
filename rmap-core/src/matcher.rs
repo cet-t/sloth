@@ -17,7 +17,7 @@
 //! the classic *sustained* while-held layer behaviour (SandS), so that path is
 //! preserved for those layouts.
 
-use crate::{Event, EventKind, KeyCode, OutputSeq, layout::{Layout, canon_sort}};
+use crate::{Event, EventKind, KeyCode, Modifiers, OutputSeq, OutputToken, layout::{Layout, canon_sort}};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
@@ -72,6 +72,27 @@ pub struct InputMatcher {
     hold_mode: bool,
     /// Keys currently repeating their resolved output (see `hold_mode`).
     repeating: std::collections::HashMap<KeyCode, OutputSeq>,
+    /// SandS (Space and Shift) master switch. When true, the SandS dual-role
+    /// behaviour is active (both the built-in Space-as-Shift below and, for
+    /// layouts that declare them, the `-option-input` sustained layers). When
+    /// false, the SandS key behaves as an ordinary key. Toggled per IME state
+    /// by the hook (`enable_sands_ime_on` / `enable_sands_ime_off`). Default
+    /// true.
+    sands_enabled: bool,
+    /// Built-in SandS key (default Space). When `sands_enabled` and the active
+    /// layout does *not* itself declare this key as a sustained trigger, this
+    /// key gains the SandS dual role: tap -> the key itself (a space), hold +
+    /// another key -> that key with Shift applied (Space and Shift). This is
+    /// layout-independent — it works even for layouts (e.g. 新下駄) that have no
+    /// `-option-input` SandS declaration, and even while the IME-off bypass is
+    /// active (so you can type capitals during direct alphanumeric input).
+    sands_key: KeyCode,
+    /// The built-in SandS key is physically held and being treated as a SandS
+    /// trigger (its down was consumed, awaiting tap-vs-hold resolution on up).
+    sands_down: bool,
+    /// A content key was pressed while the built-in SandS key was held, so the
+    /// SandS key acted as Shift -> suppress its tap (space) on release.
+    sands_partnered: bool,
 }
 
 impl Default for InputMatcher {
@@ -88,6 +109,10 @@ impl Default for InputMatcher {
             external_bypass: false,
             hold_mode: false,
             repeating: std::collections::HashMap::new(),
+            sands_enabled: true,
+            sands_key: KeyCode::Space,
+            sands_down: false,
+            sands_partnered: false,
         }
     }
 }
@@ -113,6 +138,35 @@ impl InputMatcher {
         let was_pressed = self.pressed.contains(&k);
         self.pressed.insert(k);
 
+        // --- Built-in SandS (Space and Shift), layout-independent ---
+        // Evaluated before the bypass gate so it also works while the IME-off
+        // bypass is active (type capitals during direct alphanumeric input).
+        if self.builtin_sands_active(layout) {
+            if k == self.sands_key {
+                // Hold the SandS key's own down; resolve tap-vs-hold on key-up.
+                // Auto-repeat of a held SandS key is simply swallowed.
+                if !was_pressed && !event.held {
+                    self.sands_down = true;
+                    self.sands_partnered = false;
+                    // Flush any half-formed chord so it can't merge with SandS.
+                    if let Some(seq) = self.take_pending_output(layout) {
+                        return MatchAction::Emit(seq);
+                    }
+                }
+                return MatchAction::Block;
+            }
+            if self.sands_down {
+                // Content key while the SandS key is held -> Shift + that key.
+                // Each (auto-repeat included) emits a full Shift+key tap.
+                self.sands_partnered = true;
+                self.blocked.insert(k);
+                return MatchAction::Emit(vec![OutputToken::Key {
+                    code: k,
+                    mods: Modifiers::SHIFT,
+                }]);
+            }
+        }
+
         // Global bypass (suspended / disable key / Ctrl|Alt|Win held): act as if
         // rmap were off. Drop any half-formed chord so it can't inject mid-shortcut.
         if self.bypass_active() {
@@ -128,14 +182,14 @@ impl InputMatcher {
             if let Some(seq) = self.repeating.get(&k).cloned() {
                 return MatchAction::Emit(seq);
             }
-            if self.blocked.contains(&k) || layout.sustained_triggers.contains(&k) {
+            if self.blocked.contains(&k) || self.is_sustained_trigger(k, layout) {
                 return MatchAction::Block;
             }
             return MatchAction::PassThrough;
         }
 
         // --- Sustained (while-held) layer path (SandS) ---
-        if layout.sustained_triggers.contains(&k) {
+        if self.is_sustained_trigger(k, layout) {
             // A new sustained trigger starts a hold layer; flush any chord first.
             let flushed = self.take_pending_output(layout);
             self.blocked.insert(k);
@@ -228,6 +282,33 @@ impl InputMatcher {
 
     fn on_key_up(&mut self, event: &Event, layout: &Layout) -> MatchAction {
         let k = event.code;
+
+        // --- Built-in SandS release (driven by `sands_down`, not the gate, so an
+        // in-flight hold completes even if SandS was disabled mid-hold) ---
+        if self.sands_down {
+            if k == self.sands_key {
+                self.pressed.remove(&k);
+                let partnered = self.sands_partnered;
+                self.sands_down = false;
+                self.sands_partnered = false;
+                self.blocked.remove(&k);
+                if !partnered {
+                    // Tap (no content partner) -> emit the SandS key itself.
+                    return MatchAction::Emit(vec![OutputToken::Key {
+                        code: self.sands_key,
+                        mods: Modifiers::empty(),
+                    }]);
+                }
+                return MatchAction::Block;
+            }
+            if self.blocked.contains(&k) {
+                // Release of a content key that was consumed during a SandS hold.
+                self.pressed.remove(&k);
+                self.blocked.remove(&k);
+                return MatchAction::Block;
+            }
+        }
+
         // Evaluate bypass while the key is still "pressed" so e.g. a disable
         // key's own up still counts as held.
         let bypass = self.bypass_active();
@@ -241,7 +322,7 @@ impl InputMatcher {
         }
 
         // Sustained trigger release: tap-alone emits its tap output.
-        if layout.sustained_triggers.contains(&k) {
+        if self.is_sustained_trigger(k, layout) {
             self.blocked.remove(&k);
             let had_partner = self.layer_had_partner.remove(&k);
             if !had_partner {
@@ -408,8 +489,29 @@ impl InputMatcher {
 
     // --- sustained layer helpers ---
 
+    /// Whether the built-in (layout-independent) SandS behaviour applies to the
+    /// SandS key right now. Active when SandS is enabled, no bypass-causing
+    /// modifier/disable key is held, we're not suspended, and the layout does
+    /// not itself declare the SandS key as a sustained trigger (in which case
+    /// the layout-driven `-option-input` layer takes precedence). Notably this
+    /// ignores `external_bypass`, so SandS still works while the IME-off bypass
+    /// is active.
+    fn builtin_sands_active(&self, layout: &Layout) -> bool {
+        self.sands_enabled
+            && !self.suspended
+            && !self.any_disable_key_held()
+            && !self.shortcut_modifier_held()
+            && !layout.sustained_triggers.contains(&self.sands_key)
+    }
+
+    /// Whether `k` is a SandS sustained while-held layer trigger right now
+    /// (declared via `-option-input` *and* SandS is enabled).
+    fn is_sustained_trigger(&self, k: KeyCode, layout: &Layout) -> bool {
+        self.sands_enabled && layout.sustained_triggers.contains(&k)
+    }
+
     fn any_sustained_held(&self, layout: &Layout) -> bool {
-        self.pressed.iter().any(|k| layout.sustained_triggers.contains(k))
+        self.pressed.iter().any(|k| self.is_sustained_trigger(*k, layout))
     }
 
     fn active_sustained_layers(&self, layout: &Layout) -> Vec<KeyCode> {
@@ -417,16 +519,16 @@ impl InputMatcher {
             .pressed
             .iter()
             .copied()
-            .filter(|k| layout.sustained_triggers.contains(k))
+            .filter(|k| self.is_sustained_trigger(*k, layout))
             .collect();
         canon_sort(&mut v);
         v
     }
 
     fn mark_sustained_partners(&mut self, layout: &Layout) {
-        for k in self.pressed.iter() {
-            if layout.sustained_triggers.contains(k) {
-                self.layer_had_partner.insert(*k);
+        for k in self.pressed.iter().copied().collect::<Vec<_>>() {
+            if self.is_sustained_trigger(k, layout) {
+                self.layer_had_partner.insert(k);
             }
         }
     }
@@ -458,6 +560,12 @@ impl InputMatcher {
                     | KeyCode::MetaR
             )
         })
+    }
+
+    /// SandS (Space and Shift): enable/disable the layout's sustained
+    /// while-held layer triggers (`-option-input`). See `sands_enabled`.
+    pub fn set_sands_enabled(&mut self, enabled: bool) {
+        self.sands_enabled = enabled;
     }
 
     pub fn set_disable_keys(&mut self, keys: impl IntoIterator<Item = KeyCode>) {
@@ -498,6 +606,8 @@ impl InputMatcher {
         self.layer_had_partner.clear();
         self.blocked.clear();
         self.repeating.clear();
+        self.sands_down = false;
+        self.sands_partnered = false;
         self.clear_pending();
     }
 

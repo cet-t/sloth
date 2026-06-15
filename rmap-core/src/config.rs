@@ -25,6 +25,25 @@ pub struct AppConfig {
     /// passes through. Default false = always active regardless of IME state.
     #[serde(default, alias = "activate_only_when_ime_off")]
     pub activate_only_when_ime_on: bool,
+    /// Optional alternate layout file used while the IME is OFF, when
+    /// `activate_only_when_ime_on` is true. Empty (default) keeps the old
+    /// behaviour: pass everything through while the IME is OFF.
+    #[serde(default)]
+    pub ime_off_layout: String,
+    /// SandS direct-input key (e.g. "shift", "muhenkan" — same names as
+    /// `disable_keys`). Which physical key, while held, triggers
+    /// `direct_input_mode`. Empty (default) -> no key configured.
+    #[serde(default)]
+    pub direct_input_key: String,
+    /// SandS: what holding `direct_input_key` does.
+    /// - `"off"` (default): nothing — `direct_input_key` is inert.
+    /// - `"raw"` ("オン（物理レイアウト）"): while held, fully bypass remapping
+    ///   (raw physical-keyboard input), even while the IME is ON.
+    /// - `"ime_off"` ("オン（IMEオフ）"): while held, switch the active layout
+    ///   to `ime_off_layout` (even while the IME is ON). If `ime_off_layout`
+    ///   is unset, falls back to `"raw"` behaviour.
+    #[serde(default)]
+    pub direct_input_mode: String,
     /// Simultaneous-press (chord) detection window, in milliseconds. Keys
     /// pressed within this window of each other are treated as a chord
     /// rather than separate taps. Default 40ms (matches the matcher's
@@ -38,6 +57,20 @@ pub struct AppConfig {
     /// ("単打扱い").
     #[serde(default)]
     pub hold_mode: bool,
+    /// SandS (Space and Shift): whether the layout's sustained while-held
+    /// layer triggers (declared via `-option-input`, e.g. tap Space for a
+    /// space / hold Space for Shift) are active while the IME is ON. Default
+    /// true. When false, those keys behave as ordinary keys (no layer/tap
+    /// distinction).
+    #[serde(default = "default_true")]
+    pub enable_sands_ime_on: bool,
+    /// Same as `enable_sands_ime_on`, but while the IME is OFF. Default true.
+    #[serde(default = "default_true")]
+    pub enable_sands_ime_off: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Expand a config key name to the concrete `KeyCode`s it covers. Generic
@@ -109,8 +142,13 @@ impl AppConfig {
             disable_keys: Vec::new(),
             enable_log: false,
             activate_only_when_ime_on: false,
+            ime_off_layout: String::new(),
+            direct_input_key: String::new(),
+            direct_input_mode: String::new(),
             combo_window_ms: 0,
             hold_mode: false,
+            enable_sands_ime_on: true,
+            enable_sands_ime_off: true,
         }
     }
 
