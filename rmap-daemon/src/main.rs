@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 //! rmap-daemon: resident remapper. Owns hooks, applies layouts, IPC server, tray.
 
 use anyhow::Result;

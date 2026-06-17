@@ -5,7 +5,7 @@
 use crate::{Event, EventKind, KeyCode, KeyboardLayout, Modifiers, OutputSeq, OutputToken, SpecialKey, InputMatcher, MatchAction, layout::Layout, DvorakJLayoutLoader, config::AppConfig, loader::LayoutLoader};
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM, HANDLE, CloseHandle};
@@ -36,6 +36,12 @@ static HOOK_STATE: OnceLock<Mutex<HookState>> = OnceLock::new();
 /// OFF (see `AppConfig::activate_only_when_ime_off`). Read lock-free by the
 /// IME poll thread; set on install/reload.
 static IME_GATING: AtomicBool = AtomicBool::new(false);
+
+/// Flush-timer dispatch rate, in milliseconds (`AppConfig::dispatch_rate_ms`):
+/// how long the chord flush thread sleeps between wakeups. Read lock-free each
+/// iteration so a live reload takes effect without restarting the thread. 0 is
+/// clamped to 1ms.
+static DISPATCH_RATE_MS: AtomicU64 = AtomicU64::new(5);
 
 /// Last IME open state we logged, so transitions are logged once (not every
 /// poll). -1 = unknown, 0 = closed/off, 1 = open/on.
@@ -148,15 +154,15 @@ fn recompute_layout_locked(st: &mut HookState) {
 
     // SandS direct-input key held: `direct_input_mode` decides what happens.
     // `ImeOff` switches to ime_off_layout (falling back to `Raw`/bypass if
-    // unset); `Raw` fully bypasses; `Off` does nothing.
+    // unset); `Raw` fully bypasses; `Off` falls back to raw bypass (so the
+    // configured direct-input key always produces physical-key output).
     let direct_wants_off_layout = st.direct_input_active
         && st.direct_input_mode == DirectInputMode::ImeOff
         && st.ime_off_layout.is_some();
     let direct_wants_bypass = st.direct_input_active
         && match st.direct_input_mode {
-            DirectInputMode::Raw => true,
+            DirectInputMode::Raw | DirectInputMode::Off => true,
             DirectInputMode::ImeOff => st.ime_off_layout.is_none(),
-            DirectInputMode::Off => false,
         };
 
     let want_off = ime_wants_off_layout || direct_wants_off_layout;
@@ -244,6 +250,7 @@ pub fn install_and_run_windows_hook() -> JoinHandle<()> {
     let app_config = AppConfig::load(Path::new("data/config.json"))
         .unwrap_or_else(|_| AppConfig::fallback());
     IME_GATING.store(app_config.activate_only_when_ime_on, Ordering::Relaxed);
+    DISPATCH_RATE_MS.store(app_config.dispatch_rate_ms.max(1), Ordering::Relaxed);
     let initial_app = get_foreground_app_id();
     let normal_layout = std::sync::Arc::new(load_layout_for_app(&initial_app, &app_config));
     let ime_off_layout = load_optional_layout(&app_config.ime_off_layout);
@@ -278,16 +285,20 @@ pub fn install_and_run_windows_hook() -> JoinHandle<()> {
     HOOK_STATE.set(Mutex::new(state)).ok();
     recompute_layout_locked(&mut lock_state());
 
-    // 同時打鍵 flush timer + IME gate poller. The flush part runs every ~5ms so
-    // a pending solo key is emitted promptly once its combo window elapses. The
-    // IME gate is checked less often (~every 60ms) because `SendMessageW` is
-    // comparatively expensive. Both extract what they need under the lock and
-    // release it before any blocking call (inject / IME query).
+    // 同時打鍵 flush timer + IME gate poller. The flush part runs every
+    // `DISPATCH_RATE_MS` (default 5ms, user-tunable) so a pending solo key is
+    // emitted promptly once its combo window elapses. The IME gate is checked
+    // on a fixed ~60ms wall-clock cadence (independent of the dispatch rate)
+    // because `SendMessageW` is comparatively expensive. Both extract what they
+    // need under the lock and release it before any blocking call (inject / IME
+    // query).
     thread::spawn(|| {
-        let mut tick: u32 = 0;
+        const IME_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(60);
+        let mut last_ime_poll = std::time::Instant::now();
         loop {
-            thread::sleep(std::time::Duration::from_millis(5));
-            tick = tick.wrapping_add(1);
+            thread::sleep(std::time::Duration::from_millis(
+                DISPATCH_RATE_MS.load(Ordering::Relaxed).max(1),
+            ));
 
             // Flush a due chord: take the output under the lock, inject after.
             let flush: Option<(OutputSeq, KeyboardLayout)> = {
@@ -306,7 +317,8 @@ pub fn install_and_run_windows_hook() -> JoinHandle<()> {
 
             // IME gate (~60ms): if the layout is configured to be active only
             // while the IME is ON, bypass remapping whenever the IME is OFF.
-            if tick % 12 == 0 {
+            if last_ime_poll.elapsed() >= IME_POLL_INTERVAL {
+                last_ime_poll = std::time::Instant::now();
                 if IME_GATING.load(Ordering::Relaxed) {
                     match ime_open_status() {
                         Some(open) => {
@@ -413,9 +425,11 @@ unsafe extern "system" fn low_level_proc(n_code: i32, w_param: WPARAM, l_param: 
 
         // Direct-input key (AppConfig::direct_input_key): while held, prefer
         // `ime_off_layout` (or bypass, if unset) even though the IME is ON.
+        // Active whenever the key is configured (non-empty), regardless of
+        // `direct_input_mode` — even "off" gives raw bypass so that e.g.
+        // Shift+letter always produces the physical key.
         // Toggle only on the real down/up edge (ignore OS auto-repeat).
-        if st.direct_input_mode != DirectInputMode::Off
-            && !st.direct_input_keys.is_empty()
+        if !st.direct_input_keys.is_empty()
             && st.direct_input_keys.contains(&code)
         {
             if is_down && !held {
@@ -608,6 +622,18 @@ fn inject_output_seq(seq: &OutputSeq, keyboard: KeyboardLayout) {
                 inputs.push(make_key_input(vk, false));
                 inputs.push(make_key_input(vk, true));
             }
+            OutputToken::ModDown(code) => {
+                let vk = keycode_to_vk(*code, keyboard);
+                if vk.0 != 0 {
+                    inputs.push(make_key_input(vk, false));
+                }
+            }
+            OutputToken::ModUp(code) => {
+                let vk = keycode_to_vk(*code, keyboard);
+                if vk.0 != 0 {
+                    inputs.push(make_key_input(vk, true));
+                }
+            }
         }
     }
 
@@ -735,6 +761,7 @@ pub fn reload_layout() {
     let new_cfg = AppConfig::load(Path::new("data/config.json"))
         .unwrap_or_else(|_| AppConfig::fallback());
     IME_GATING.store(new_cfg.activate_only_when_ime_on, Ordering::Relaxed);
+    DISPATCH_RATE_MS.store(new_cfg.dispatch_rate_ms.max(1), Ordering::Relaxed);
     let app = get_foreground_app_id();
     let new_layout = std::sync::Arc::new(load_layout_for_app(&app, &new_cfg));
     let new_ime_off_layout = load_optional_layout(&new_cfg.ime_off_layout);

@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 //! rmap-config: settings window (Slint GUI). Edits the fields that exist in
 //! `data/config.json` (rmap_core::config::AppConfig) and writes them back.
 //!
@@ -56,8 +57,6 @@ fn main() -> Result<()> {
         None => {}
     }
 
-    // Avoid piling up windows when 設定 is pressed repeatedly from the tray:
-    // if a settings window is already open, just bring it to front.
     if focus_existing_window() {
         return Ok(());
     }
@@ -65,9 +64,6 @@ fn main() -> Result<()> {
     run_settings_window()
 }
 
-/// Find an already-open settings window by its title and bring it to the
-/// foreground. Returns true if such a window was found (and this process
-/// should exit without creating a new one).
 #[cfg(windows)]
 fn focus_existing_window() -> bool {
     use windows::core::PCWSTR;
@@ -99,9 +95,6 @@ fn focus_existing_window() -> bool {
 
 const CONFIG_PATH: &str = "data/config.json";
 
-/// A bare HWND wrapper so the native file dialog can be parented (owned) by our
-/// settings window. Without an owner the dialog opens *behind* our topmost
-/// window and can't be interacted with.
 #[cfg(windows)]
 struct HwndParent(std::num::NonZeroIsize);
 
@@ -111,7 +104,6 @@ impl raw_window_handle::HasWindowHandle for HwndParent {
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         let handle = raw_window_handle::Win32WindowHandle::new(self.0);
-        // SAFETY: the HWND outlives the short-lived dialog call below.
         Ok(unsafe {
             raw_window_handle::WindowHandle::borrow_raw(raw_window_handle::RawWindowHandle::Win32(
                 handle,
@@ -134,7 +126,6 @@ impl raw_window_handle::HasDisplayHandle for HwndParent {
     }
 }
 
-/// Find our settings window's HWND so the file dialog can be parented to it.
 #[cfg(windows)]
 fn settings_window_parent() -> Option<HwndParent> {
     use windows::core::PCWSTR;
@@ -147,12 +138,6 @@ fn settings_window_parent() -> Option<HwndParent> {
     std::num::NonZeroIsize::new(hwnd.0).map(HwndParent)
 }
 
-/// Pick a layout file via the native file dialog asynchronously, starting in
-/// `data/layouts` if it exists. Async (driven by `slint::spawn_local`) so the
-/// dialog never blocks the UI event loop — a synchronous dialog froze the
-/// window (blank, no repaint) and fought the event loop. On Windows the dialog
-/// is parented to the settings window so it isn't trapped behind our topmost
-/// window.
 async fn pick_layout_file_async() -> Option<String> {
     let mut dialog = rfd::AsyncFileDialog::new().add_filter("Layout", &["txt"]);
     let start_dir = Path::new("data/layouts");
@@ -169,15 +154,16 @@ async fn pick_layout_file_async() -> Option<String> {
         .map(|f| f.path().to_string_lossy().replace('\\', "/"))
 }
 
-fn run_settings_window() -> Result<()> {
-    let cfg = AppConfig::load(Path::new(CONFIG_PATH)).unwrap_or_else(|_| AppConfig::fallback());
+// ---------------------------------------------------------------------------
+// Window setup: split into focused functions
+// ---------------------------------------------------------------------------
 
-    let window = AppWindow::new()?;
-
+fn load_config_to_window(window: &AppWindow, cfg: &AppConfig) -> Vec<String> {
     window.set_default_layout(cfg.default_layout.clone().into());
     window.set_enable_log(cfg.enable_log);
     window.set_activate_only_when_ime_on(cfg.activate_only_when_ime_on);
     window.set_ime_off_layout(cfg.ime_off_layout.clone().into());
+
     let direct_input_key_index = match cfg.direct_input_key.trim().to_lowercase().as_str() {
         "shift" | "lshift" => 1,
         "muhenkan" => 2,
@@ -186,6 +172,7 @@ fn run_settings_window() -> Result<()> {
         _ => 0,
     };
     window.set_direct_input_key_index(direct_input_key_index);
+
     let sands_mode_index = match cfg.direct_input_mode.trim().to_lowercase().as_str() {
         "raw" => 1,
         "ime_off" => 2,
@@ -196,6 +183,7 @@ fn run_settings_window() -> Result<()> {
     window.set_hold_mode(cfg.hold_mode);
     window.set_enable_sands_ime_on(cfg.enable_sands_ime_on);
     window.set_enable_sands_ime_off(cfg.enable_sands_ime_off);
+    window.set_dispatch_rate_ms(if cfg.dispatch_rate_ms > 0 { cfg.dispatch_rate_ms as i32 } else { 5 });
 
     let lower_disable: Vec<String> = cfg
         .disable_keys
@@ -211,9 +199,7 @@ fn run_settings_window() -> Result<()> {
     );
     window.set_disable_shift(lower_disable.iter().any(|s| s == "shift"));
 
-    // Keep custom (non ctrl/alt/win/shift) entries so we round-trip them unchanged.
-    let custom_disable_keys: Vec<String> = cfg
-        .disable_keys
+    cfg.disable_keys
         .iter()
         .filter(|s| {
             !matches!(
@@ -222,8 +208,10 @@ fn run_settings_window() -> Result<()> {
             )
         })
         .cloned()
-        .collect();
+        .collect()
+}
 
+fn setup_profiles(window: &AppWindow, cfg: &AppConfig) -> Rc<VecModel<ProfileRow>> {
     let mut profile_names: Vec<String> = cfg.profiles.keys().cloned().collect();
     profile_names.sort();
     let rows: Vec<ProfileRow> = profile_names
@@ -258,11 +246,10 @@ fn run_settings_window() -> Result<()> {
         .unwrap_or(0);
     window.set_default_profile_index(default_profile_index);
 
-    window.set_status_text("".into());
-    refresh_profile_layout_text(&window, &cfg);
-    refresh_daemon_status(&window);
+    profiles_model
+}
 
-    // 設定 -> デフォルトレイアウトの参照ファイルを選択ダイアログで指定する。
+fn setup_browse_callbacks(window: &AppWindow, profiles_model: &Rc<VecModel<ProfileRow>>) {
     let window_weak = window.as_weak();
     window.on_browse_default_layout(move || {
         let window_weak = window_weak.clone();
@@ -275,7 +262,6 @@ fn run_settings_window() -> Result<()> {
         });
     });
 
-    // IMEオフ時のレイアウトファイルを選択ダイアログで指定する。
     let window_weak = window.as_weak();
     window.on_browse_ime_off_layout(move || {
         let window_weak = window_weak.clone();
@@ -288,7 +274,6 @@ fn run_settings_window() -> Result<()> {
         });
     });
 
-    // 選択中プロファイルのレイアウトファイルを選択ダイアログで指定する。
     let window_weak = window.as_weak();
     let model = profiles_model.clone();
     window.on_browse_profile_layout(move || {
@@ -308,8 +293,9 @@ fn run_settings_window() -> Result<()> {
             }
         });
     });
+}
 
-    // 選択中プロファイルのレイアウトを直接入力で編集する。
+fn setup_profile_callbacks(window: &AppWindow, profiles_model: &Rc<VecModel<ProfileRow>>) {
     let window_weak = window.as_weak();
     let model = profiles_model.clone();
     window.on_profile_layout_edited(move |text| {
@@ -318,14 +304,12 @@ fn run_settings_window() -> Result<()> {
         if idx < 0 {
             return;
         }
-        let idx = idx as usize;
-        if let Some(mut row) = model.row_data(idx) {
+        if let Some(mut row) = model.row_data(idx as usize) {
             row.layout = text;
-            model.set_row_data(idx, row);
+            model.set_row_data(idx as usize, row);
         }
     });
 
-    // 選択中プロファイルのトグル（SandS / Gestures / Shortcuts）。
     let window_weak = window.as_weak();
     let model = profiles_model.clone();
     window.on_toggle_profile_sands(move || {
@@ -334,10 +318,9 @@ fn run_settings_window() -> Result<()> {
         if idx < 0 {
             return;
         }
-        let idx = idx as usize;
-        if let Some(mut row) = model.row_data(idx) {
+        if let Some(mut row) = model.row_data(idx as usize) {
             row.sands = !row.sands;
-            model.set_row_data(idx, row);
+            model.set_row_data(idx as usize, row);
         }
     });
 
@@ -349,10 +332,9 @@ fn run_settings_window() -> Result<()> {
         if idx < 0 {
             return;
         }
-        let idx = idx as usize;
-        if let Some(mut row) = model.row_data(idx) {
+        if let Some(mut row) = model.row_data(idx as usize) {
             row.gestures = !row.gestures;
-            model.set_row_data(idx, row);
+            model.set_row_data(idx as usize, row);
         }
     });
 
@@ -364,15 +346,14 @@ fn run_settings_window() -> Result<()> {
         if idx < 0 {
             return;
         }
-        let idx = idx as usize;
-        if let Some(mut row) = model.row_data(idx) {
+        if let Some(mut row) = model.row_data(idx as usize) {
             row.shortcuts = !row.shortcuts;
-            model.set_row_data(idx, row);
+            model.set_row_data(idx as usize, row);
         }
     });
+}
 
-    // デーモン操作（再生/停止トグル／再起動／終了）。デーモンが起動していない
-    // 場合は status_text にエラーを表示するだけ（NFR-4 fail-fast）。
+fn setup_daemon_callbacks(window: &AppWindow) {
     let window_weak = window.as_weak();
     window.on_toggle_running(move || {
         let window = window_weak.unwrap();
@@ -397,8 +378,14 @@ fn run_settings_window() -> Result<()> {
         );
         refresh_daemon_status(&window);
     });
+}
 
-    let mut base_cfg = cfg;
+fn setup_save_callback(
+    window: &AppWindow,
+    mut base_cfg: AppConfig,
+    profiles_model: &Rc<VecModel<ProfileRow>>,
+    custom_disable_keys: Vec<String>,
+) {
     let window_weak = window.as_weak();
     let model = profiles_model.clone();
     window.on_save(move || {
@@ -418,16 +405,19 @@ fn run_settings_window() -> Result<()> {
             3 => "henkan",
             4 => "capslock",
             _ => "",
-        }.to_string();
+        }
+        .to_string();
         base_cfg.direct_input_mode = match window.get_sands_mode_index() {
             1 => "raw",
             2 => "ime_off",
             _ => "off",
-        }.to_string();
+        }
+        .to_string();
         base_cfg.combo_window_ms = window.get_combo_window_ms().max(1) as u64;
         base_cfg.hold_mode = window.get_hold_mode();
         base_cfg.enable_sands_ime_on = window.get_enable_sands_ime_on();
         base_cfg.enable_sands_ime_off = window.get_enable_sands_ime_off();
+        base_cfg.dispatch_rate_ms = window.get_dispatch_rate_ms().max(1) as u64;
 
         let mut disable_keys = custom_disable_keys.clone();
         if window.get_disable_ctrl() {
@@ -459,6 +449,25 @@ fn run_settings_window() -> Result<()> {
         }
         refresh_profile_layout_text(&window, &base_cfg);
     });
+}
+
+// ---------------------------------------------------------------------------
+
+fn run_settings_window() -> Result<()> {
+    let cfg = AppConfig::load(Path::new(CONFIG_PATH)).unwrap_or_else(|_| AppConfig::fallback());
+    let window = AppWindow::new()?;
+
+    let custom_disable_keys = load_config_to_window(&window, &cfg);
+    let profiles_model = setup_profiles(&window, &cfg);
+
+    window.set_status_text("".into());
+    refresh_profile_layout_text(&window, &cfg);
+    refresh_daemon_status(&window);
+
+    setup_browse_callbacks(&window, &profiles_model);
+    setup_profile_callbacks(&window, &profiles_model);
+    setup_daemon_callbacks(&window);
+    setup_save_callback(&window, cfg, &profiles_model, custom_disable_keys);
 
     window.show()?;
     spawn_always_on_top();
@@ -467,11 +476,6 @@ fn run_settings_window() -> Result<()> {
     Ok(())
 }
 
-/// Pin the settings window above all others (Win32: SetWindowPos with
-/// HWND_TOPMOST). Runs on a background thread because the native window
-/// isn't registered with the OS until the event loop starts pumping
-/// messages, so we can't find it by title synchronously after `show()`.
-/// No-op on non-Windows targets.
 #[cfg(windows)]
 fn spawn_always_on_top() {
     use windows::core::PCWSTR;
@@ -508,7 +512,6 @@ fn spawn_always_on_top() {
 #[cfg(not(windows))]
 fn spawn_always_on_top() {}
 
-/// Reflect the result of an IPC daemon-control command in the status line.
 fn report_ipc_result(window: &AppWindow, result: anyhow::Result<IpcResponse>, ok_text: &str) {
     match result {
         Ok(IpcResponse::Ok) => window.set_status_text(ok_text.into()),
@@ -517,22 +520,17 @@ fn report_ipc_result(window: &AppWindow, result: anyhow::Result<IpcResponse>, ok
     }
 }
 
-/// Query the daemon's running/suspended state via IPC and update the
-/// left-pane status panel. Shows "未起動" if the daemon isn't reachable.
 fn refresh_daemon_status(window: &AppWindow) {
     let (text, suspended) = match send_command(&IpcCommand::Status) {
         Ok(IpcResponse::Status { suspended, .. }) => {
             (if suspended { "停止中" } else { "稼働中" }, suspended)
         }
-        // Daemon unreachable: show "再生" as the actionable toggle label.
         _ => ("未起動", true),
     };
     window.set_running_status_text(text.into());
     window.set_daemon_suspended(suspended);
 }
 
-/// Update the left-pane "current profile / layout" display from `cfg`'s
-/// default profile.
 fn refresh_profile_layout_text(window: &AppWindow, cfg: &AppConfig) {
     let profile = cfg.app_map.default_profile.clone();
     let layout = cfg

@@ -67,10 +67,23 @@ pub struct AppConfig {
     /// Same as `enable_sands_ime_on`, but while the IME is OFF. Default true.
     #[serde(default = "default_true")]
     pub enable_sands_ime_off: bool,
+    /// Internal flush-timer dispatch rate, in milliseconds: how often the
+    /// resident timer thread wakes to flush a pending chord (and, less often,
+    /// poll the IME state). Default 5ms. Lower = finer-grained dispatch (helps
+    /// avoid the "すり抜け" symptom on older CPUs at the cost of more wakeups);
+    /// higher = fewer wakeups. 0 or unset falls back to the 5ms default.
+    #[serde(default = "default_dispatch_rate_ms")]
+    pub dispatch_rate_ms: u64,
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// Default flush-timer dispatch rate (ms); mirrors the historical hard-coded
+/// 5ms tick of the chord flush thread.
+fn default_dispatch_rate_ms() -> u64 {
+    5
 }
 
 /// Expand a config key name to the concrete `KeyCode`s it covers. Generic
@@ -149,6 +162,7 @@ impl AppConfig {
             hold_mode: false,
             enable_sands_ime_on: true,
             enable_sands_ime_off: true,
+            dispatch_rate_ms: default_dispatch_rate_ms(),
         }
     }
 

@@ -23,6 +23,7 @@ tasks/
 build.bat
 
 # Build artifacts
+dist/
 *.exe
 *.dll
 *.dylib

@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "rmap-daemon"
+name = "rmap"
 path = "src/main.rs"
 
 [dependencies]

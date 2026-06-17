@@ -93,6 +93,11 @@ pub struct InputMatcher {
     /// A content key was pressed while the built-in SandS key was held, so the
     /// SandS key acted as Shift -> suppress its tap (space) on release.
     sands_partnered: bool,
+    /// A synthetic LSHIFT key-down has been injected and is still held. Set on
+    /// the first SandS partner press; cleared on Space release (LSHIFT up
+    /// injected). Keeping LSHIFT held across multiple content keys lets
+    /// Shift-modified operations (e.g. Shift+Arrow selection) work continuously.
+    sands_shift_injected: bool,
 }
 
 impl Default for InputMatcher {
@@ -113,6 +118,7 @@ impl Default for InputMatcher {
             sands_key: KeyCode::Space,
             sands_down: false,
             sands_partnered: false,
+            sands_shift_injected: false,
         }
     }
 }
@@ -156,14 +162,18 @@ impl InputMatcher {
                 return MatchAction::Block;
             }
             if self.sands_down {
-                // Content key while the SandS key is held -> Shift + that key.
-                // Each (auto-repeat included) emits a full Shift+key tap.
                 self.sands_partnered = true;
-                self.blocked.insert(k);
-                return MatchAction::Emit(vec![OutputToken::Key {
-                    code: k,
-                    mods: Modifiers::SHIFT,
-                }]);
+                // Don't eat the content key — let it pass through to the OS as a
+                // real physical event. Only inject a synthetic LSHIFT so the OS
+                // sees Shift + the real key. This preserves scan codes, extended
+                // flags, and OS-level auto-repeat, making Shift+Arrow selection
+                // (and every other shifted action) work identically to a physical
+                // Shift hold.
+                if !self.sands_shift_injected {
+                    self.sands_shift_injected = true;
+                    return MatchAction::EmitThenPass(vec![OutputToken::ModDown(KeyCode::ShiftL)]);
+                }
+                return MatchAction::PassThrough;
             }
         }
 
@@ -171,6 +181,12 @@ impl InputMatcher {
         // rmap were off. Drop any half-formed chord so it can't inject mid-shortcut.
         if self.bypass_active() {
             self.clear_pending();
+            // If a synthetic LSHIFT was held for SandS, release it before
+            // entering bypass so shortcuts (Ctrl+C) aren't polluted with Shift.
+            if self.sands_shift_injected {
+                self.sands_shift_injected = false;
+                return MatchAction::EmitThenPass(vec![OutputToken::ModUp(KeyCode::ShiftL)]);
+            }
             return MatchAction::PassThrough;
         }
 
@@ -289,24 +305,24 @@ impl InputMatcher {
             if k == self.sands_key {
                 self.pressed.remove(&k);
                 let partnered = self.sands_partnered;
+                let shift_was_injected = self.sands_shift_injected;
                 self.sands_down = false;
                 self.sands_partnered = false;
+                self.sands_shift_injected = false;
                 self.blocked.remove(&k);
                 if !partnered {
-                    // Tap (no content partner) -> emit the SandS key itself.
                     return MatchAction::Emit(vec![OutputToken::Key {
                         code: self.sands_key,
                         mods: Modifiers::empty(),
                     }]);
                 }
+                if shift_was_injected {
+                    return MatchAction::Emit(vec![OutputToken::ModUp(KeyCode::ShiftL)]);
+                }
                 return MatchAction::Block;
             }
-            if self.blocked.contains(&k) {
-                // Release of a content key that was consumed during a SandS hold.
-                self.pressed.remove(&k);
-                self.blocked.remove(&k);
-                return MatchAction::Block;
-            }
+            // Content key-ups during a SandS hold pass through (the key-downs
+            // were never eaten — they passed through with synthetic LSHIFT held).
         }
 
         // Evaluate bypass while the key is still "pressed" so e.g. a disable
@@ -608,6 +624,7 @@ impl InputMatcher {
         self.repeating.clear();
         self.sands_down = false;
         self.sands_partnered = false;
+        self.sands_shift_injected = false;
         self.clear_pending();
     }
 

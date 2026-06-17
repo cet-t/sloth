@@ -196,17 +196,24 @@ fn builtin_sands_space_and_shift() {
         "tapping Space alone must emit a Space"
     );
 
-    // Hold Space + Q -> Shift+Q (capital), regardless of any kana mapping.
+    // Hold Space + Q: inject synthetic LSHIFT↓ and pass the physical Q through.
+    // The OS sees real Shift + real Q, preserving scan codes and extended flags.
     assert_eq!(m.process(&down(KeyCode::Space), &layout), MatchAction::Block);
-    let q = emit(m.process(&down(KeyCode::Q), &layout));
+    let q_action = m.process(&down(KeyCode::Q), &layout);
     assert_eq!(
-        q,
-        vec![OutputToken::Key { code: KeyCode::Q, mods: Modifiers::SHIFT }],
-        "Space held + Q must emit Shift+Q"
+        q_action,
+        MatchAction::EmitThenPass(vec![OutputToken::ModDown(KeyCode::ShiftL)]),
+        "first SandS partner injects ShiftL↓ and passes the content key through"
     );
-    assert_eq!(m.process(&up(KeyCode::Q), &layout), MatchAction::Block);
-    // Space had a partner -> no space emitted on its release.
-    assert_eq!(m.process(&up(KeyCode::Space), &layout), MatchAction::Block);
+    // Q key-up passes through (it was never eaten).
+    assert_eq!(m.process(&up(KeyCode::Q), &layout), MatchAction::PassThrough);
+    // Space release with a partner -> release the synthetic ShiftL.
+    let space_up = emit(m.process(&up(KeyCode::Space), &layout));
+    assert_eq!(
+        space_up,
+        vec![OutputToken::ModUp(KeyCode::ShiftL)],
+        "Space release after partner must release synthetic ShiftL"
+    );
 }
 
 /// When SandS is disabled (per-IME-state toggle off), the built-in Space role

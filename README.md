@@ -1,14 +1,20 @@
-# rmap
+```
+██████╗ ███╗   ███╗ █████╗ ██████╗
+██╔══██╗████╗ ████║██╔══██╗██╔══██╗
+██████╔╝██╔████╔██║███████║██████╔╝
+██╔══██╗██║╚██╔╝██║██╔══██║██╔═══╝
+██║  ██║██║ ╚═╝ ██║██║  ██║██║
+╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝
+```
 
-Multi-platform key remapper (Rust). See plan.md for full spec.
+キーボードリマッパー
 
-Status: Early prototype (data model + Windows-first hook in progress).
-
-Build:
-cargo build --release
-
-Run daemon (prototype):
-cargo run -p rmap-daemon
-
-Run config stub:
-cargo run -p rmap-config
+- [x] 基本的なレイアウトシステム（DvorakJ互換パーサ）
+- [x] SandS (Space and Shift)
+- [x] 同時打鍵エンジン
+- [ ] 打鍵（タップキー）
+- [ ] 前置シフト（prefix shift）
+- [ ] 後置シフト（suffix shift）
+- [ ] 連続シフト（sequential shift）
+- [ ] per-app プロファイル切り替え
+- [ ] macOS / Linux 対応

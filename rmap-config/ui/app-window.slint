@@ -49,6 +49,7 @@ export component AppWindow inherits Window {
     in-out property <int> sands_mode_index: 0;
     in-out property <bool> enable_sands_ime_on: true;
     in-out property <bool> enable_sands_ime_off: true;
+    in-out property <int> dispatch_rate_ms: 5;
     in-out property <bool> disable_ctrl;
     in-out property <bool> disable_alt;
     in-out property <bool> disable_win;
@@ -185,6 +186,16 @@ export component AppWindow inherits Window {
                             CheckBox {
                                 text: "SandS（タップ/ホールド判定）をIMEオフ時に有効にする";
                                 checked <=> enable_sands_ime_off;
+                            }
+                        }
+                        HorizontalBox {
+                            Text { text: "処理のディスパッチレート (ms)"; vertical-alignment: center; width: 180px; }
+                            SpinBox {
+                                width: 100px;
+                                height: 32px;
+                                minimum: 1;
+                                maximum: 100;
+                                value <=> dispatch_rate_ms;
                             }
                         }
                     }
