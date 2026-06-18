@@ -4613,7 +4613,7 @@ dependencies = [
 
 [[package]]
 name = "rmap-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -4628,7 +4628,7 @@ dependencies = [
 
 [[package]]
 name = "rmap-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bitflags 2.13.0",
@@ -4641,7 +4641,7 @@ dependencies = [
 
 [[package]]
 name = "rmap-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "notify",

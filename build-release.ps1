@@ -48,7 +48,13 @@ if (-not $SkipBuild) {
 Write-Host "`n[2/3] assembling dist/ ..." -ForegroundColor Yellow
 
 if (Test-Path $dist) {
-    Remove-Item $dist -Recurse -Force -Confirm:$false
+    try {
+        Remove-Item $dist -Recurse -Force -Confirm:$false -ErrorAction Stop
+    } catch {
+        Write-Host "  warning: could not remove old dist, retrying..." -ForegroundColor DarkYellow
+        Start-Sleep -Milliseconds 500
+        Remove-Item $dist -Recurse -Force -Confirm:$false -ErrorAction Stop
+    }
 }
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
 
@@ -93,10 +99,42 @@ Compress-Archive -Path $dist -DestinationPath $zipPath -CompressionLevel Optimal
 $zipSize = (Get-Item $zipPath).Length
 Write-Host "  => $zipName ($('{0:N0}' -f ($zipSize / 1KB)) KB)"
 
+# --- Release to GitHub ---
+Write-Host "`n[4/4] creating GitHub release ..." -ForegroundColor Yellow
+
+$tag = "v$version"
+Push-Location $root
+
+# Check if tag already exists and delete it
+$tags = @(git tag -l $tag 2>$null)
+if ($tags.Count -gt 0) {
+    Write-Host "  tag $tag already exists, deleting..." -ForegroundColor DarkGray
+    git tag -d $tag | Out-Null
+    git push origin --delete $tag 2>$null | Out-Null
+}
+
+# Create and push tag
+Write-Host "  creating tag $tag..." -ForegroundColor Gray
+git tag $tag
+git push origin $tag
+
+# Create release with ZIP
+Write-Host "  creating release on GitHub..." -ForegroundColor Gray
+gh release create $tag `
+    --title "rmap $version" `
+    --notes "リマッパー配布版 v$version" `
+    "$zipPath" `
+    --repo "cet-t/rmap"
+
+Write-Host "  ✓ Released to GitHub!" -ForegroundColor Green
+
+Pop-Location
+
 # --- Summary ---
 Write-Host "`n=== done ===" -ForegroundColor Green
 Write-Host "dist folder : $dist"
 Write-Host "ZIP archive : $zipPath"
+Write-Host "GitHub      : https://github.com/cet-t/rmap/releases/tag/$tag"
 Write-Host "`ncontents:"
 Get-ChildItem $dist -Recurse -File | ForEach-Object {
     $rel = $_.FullName.Substring($dist.Length + 1)
