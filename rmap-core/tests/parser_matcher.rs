@@ -612,10 +612,7 @@ fn rona_l_data_structure() {
         "H prefix keys with values: {:?}",
         h_prefix.keys().collect::<Vec<_>>()
     );
-    eprintln!(
-        "H prefix has L: {}",
-        h_prefix.contains_key(&KeyCode::L)
-    );
+    eprintln!("H prefix has L: {}", h_prefix.contains_key(&KeyCode::L));
 }
 
 /// ローナ: H (ハ行 trigger) data structure verification.
@@ -689,7 +686,11 @@ fn rona_h_a_combo_and_prefix() {
     m.set_combo_window_ms(0);
     m.set_prefix_window_ms(5000);
     assert_eq!(m.process(&down(KeyCode::H), &layout), MatchAction::Block);
-    assert_eq!(m.flush_due(&layout), None, "H must transition to prefix, not emit solo");
+    assert_eq!(
+        m.flush_due(&layout),
+        None,
+        "H must transition to prefix, not emit solo"
+    );
     let out = m.process(&down(KeyCode::A), &layout);
     assert_eq!(
         out,
@@ -965,12 +966,22 @@ fn rona_full_sequential_sa_no_leak() {
     assert_eq!(m.process(&up(KeyCode::S), &layout), MatchAction::Block);
     // A down → resolve via prefix_maps
     let result = m.process(&down(KeyCode::A), &layout);
-    assert!(matches!(result, MatchAction::Emit(_)), "A must resolve via prefix, got {result:?}");
-    assert_eq!(emit(result), prefix_out, "S→A sequential must produce prefix output");
+    assert!(
+        matches!(result, MatchAction::Emit(_)),
+        "A must resolve via prefix, got {result:?}"
+    );
+    assert_eq!(
+        emit(result),
+        prefix_out,
+        "S→A sequential must produce prefix output"
+    );
     // A up → consumed (key-down was blocked)
     assert_eq!(m.process(&up(KeyCode::A), &layout), MatchAction::Block);
     // Verify nothing pending (no prefix window still active)
-    assert!(!m.has_pending(), "nothing should be pending after full sequence");
+    assert!(
+        !m.has_pending(),
+        "nothing should be pending after full sequence"
+    );
 }
 
 /// ローナ: S held past combo_window → flush_due transitions to prefix →
@@ -988,10 +999,7 @@ fn rona_flush_due_prefix_then_release_no_double_arm() {
     // flush_due → combo expired → transition to prefix
     assert_eq!(m.flush_due(&layout), None);
     // S up → re-arm (expected, no harm with infinite prefix)
-    assert_eq!(
-        m.process(&up(KeyCode::S), &layout),
-        MatchAction::Block
-    );
+    assert_eq!(m.process(&up(KeyCode::S), &layout), MatchAction::Block);
     // A down → resolve via prefix_maps
     let prefix_out = layout
         .prefix_maps
