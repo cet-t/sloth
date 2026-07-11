@@ -1,11 +1,11 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    rmap リリースビルド＆パッケージスクリプト
+    sloth リリースビルド＆パッケージスクリプト
 .DESCRIPTION
     1. cargo build --release でワークスペース全体をビルド
     2. dist/ に実行ファイル + data/ を配置
-    3. ZIP アーカイブを生成 (rmap-v{VERSION}-win-x64.zip)
+    3. ZIP アーカイブを生成 (sloth-v{VERSION}-win-x64.zip)
 .EXAMPLE
     .\build-release.ps1
     .\build-release.ps1 -SkipBuild   # ビルド済みなら配布物だけ再生成
@@ -19,7 +19,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = $PSScriptRoot
 $target = Join-Path $root 'target\release'
-$dist   = Join-Path $root 'dist\rmap'
+$dist   = Join-Path $root 'dist\sloth'
 
 # --- Version from Cargo.toml ---
 $cargoToml = Get-Content (Join-Path $root 'Cargo.toml') -Raw
@@ -28,7 +28,7 @@ if ($cargoToml -match 'version\s*=\s*"([^"]+)"') {
 } else {
     $version = '0.0.0'
 }
-Write-Host "=== rmap v$version release build ===" -ForegroundColor Cyan
+Write-Host "=== sloth v$version release build ===" -ForegroundColor Cyan
 
 # --- Build ---
 if (-not $SkipBuild) {
@@ -59,7 +59,7 @@ if (Test-Path $dist) {
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
 
 # Executables
-foreach ($bin in @('rmap.exe', 'rmap-config.exe')) {
+foreach ($bin in @('sloth.exe', 'sloth-config.exe')) {
     $src = Join-Path $target $bin
     if (-not (Test-Path $src)) {
         Write-Error "missing: $src"
@@ -90,7 +90,7 @@ Get-ChildItem (Join-Path $dataSrc 'layouts\samples') -Filter '*.txt' -File | For
 # --- ZIP ---
 Write-Host "`n[3/3] creating ZIP ..." -ForegroundColor Yellow
 
-$zipName = "rmap-v$version-win-x64.zip"
+$zipName = "sloth-v$version-win-x64.zip"
 $zipPath = Join-Path $root "dist\$zipName"
 if (Test-Path $zipPath) {
     Remove-Item $zipPath -Force -Confirm:$false
@@ -121,10 +121,10 @@ git push origin $tag
 # Create release with ZIP
 Write-Host "  creating release on GitHub..." -ForegroundColor Gray
 gh release create $tag `
-    --title "rmap $version" `
+    --title "sloth $version" `
     --notes "リマッパー配布版 v$version" `
     "$zipPath" `
-    --repo "cet-t/rmap"
+    --repo "cet-t/sloth"
 
 Write-Host "  ✓ Released to GitHub!" -ForegroundColor Green
 
@@ -134,7 +134,7 @@ Pop-Location
 Write-Host "`n=== done ===" -ForegroundColor Green
 Write-Host "dist folder : $dist"
 Write-Host "ZIP archive : $zipPath"
-Write-Host "GitHub      : https://github.com/cet-t/rmap/releases/tag/$tag"
+Write-Host "GitHub      : https://github.com/cet-t/sloth/releases/tag/$tag"
 Write-Host "`ncontents:"
 Get-ChildItem $dist -Recurse -File | ForEach-Object {
     $rel = $_.FullName.Substring($dist.Length + 1)

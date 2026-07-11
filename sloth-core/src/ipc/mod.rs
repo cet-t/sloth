@@ -1,5 +1,5 @@
 //! IPC protocol for daemon <-> config (roadmap 11).
-//! Windows: named pipe, same-user ACL (prototype: \\.\pipe\rmap).
+//! Windows: named pipe, same-user ACL (prototype: \\.\pipe\sloth).
 //! Messages are length-prefixed JSON for simplicity.
 
 #[cfg(target_os = "windows")]

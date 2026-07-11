@@ -1,16 +1,16 @@
 //! Integration smoke for the DvorakJ parser + 同時打鍵 InputMatcher.
-//! Run with: cargo test -p rmap-core
+//! Run with: cargo test -p sloth-core
 //!
 //! The matcher is now a timed simultaneous-press engine. These tests exercise
 //! the behaviours that broke before the rewrite: in-order solo output of
 //! chord-trigger keys, actual chords firing, function-key tokens, sustained
 //! SandS layers, and the bypass paths (disable key / suspend / Ctrl).
 
-use dvorakj_parser::DvorakJLayoutLoader;
-use rmap_core::{
+use sloth_core::{
     Event, EventKind, InputMatcher, KeyCode, LayoutLoader, LayoutMode, MatchAction, Modifiers,
     OutputToken, SpecialKey,
 };
+use sloth_dvorakj_adapter::RmapDvorakJLayoutLoader;
 
 fn down(code: KeyCode) -> Event {
     Event::new(EventKind::KeyDown, code, Modifiers::empty())
@@ -30,8 +30,8 @@ fn emit(a: MatchAction) -> Vec<OutputToken> {
         other => panic!("expected Emit, got {other:?}"),
     }
 }
-fn load(name: &str) -> rmap_core::Layout {
-    let loader = DvorakJLayoutLoader::new();
+fn load(name: &str) -> sloth_core::Layout {
+    let loader = RmapDvorakJLayoutLoader::new();
     let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let path = std::path::Path::new(&manifest).join("..").join(name);
     let bytes = std::fs::read(&path).unwrap_or_else(|_| panic!("missing sample {name}"));
@@ -63,7 +63,7 @@ fn simultaneous_chord_fires() {
     // K (0x25) shift + Q (0x10) content -> ふぁ per the -25 block, row1 col0.
     let chord = {
         let mut v = vec![KeyCode::K, KeyCode::Q];
-        rmap_core::layout::canon_sort(&mut v);
+        sloth_core::layout::canon_sort(&mut v);
         v
     };
     let combo_out = layout
@@ -357,7 +357,7 @@ fn sequential_prefix_basic() {
     let layout = load("data/layouts/月2-263.txt");
     let d_layer = {
         let mut v = vec![KeyCode::D];
-        rmap_core::layout::canon_sort(&mut v);
+        sloth_core::layout::canon_sort(&mut v);
         v
     };
     let prefix_map = layout
@@ -389,7 +389,7 @@ fn sequential_prefix_overlap() {
     let layout = load("data/layouts/月2-263.txt");
     let d_layer = {
         let mut v = vec![KeyCode::D];
-        rmap_core::layout::canon_sort(&mut v);
+        sloth_core::layout::canon_sort(&mut v);
         v
     };
     let prefix_map = layout
@@ -494,7 +494,7 @@ fn rona_data_structure() {
 
     // Combo K+A exists.
     let mut chord = vec![KeyCode::K, KeyCode::A];
-    rmap_core::layout::canon_sort(&mut chord);
+    sloth_core::layout::canon_sort(&mut chord);
     assert!(layout.combos.contains_key(&chord), "combo K+A exists");
 
     // Prefix K→A exists.
@@ -553,7 +553,7 @@ fn rona_all_triggers_registered() {
         );
         // Each consonant+A should produce a combo
         let mut chord = vec![k, KeyCode::A];
-        rmap_core::layout::canon_sort(&mut chord);
+        sloth_core::layout::canon_sort(&mut chord);
         assert!(
             layout.combos.contains_key(&chord),
             "{:?}+A combo must exist",
@@ -632,7 +632,7 @@ fn rona_h_data_structure() {
 
     // Combo H+A must exist → は
     let mut chord = vec![KeyCode::H, KeyCode::A];
-    rmap_core::layout::canon_sort(&mut chord);
+    sloth_core::layout::canon_sort(&mut chord);
     assert!(
         layout.combos.contains_key(&chord),
         "combo H+A must exist, combos with H: {:?}",
@@ -664,7 +664,7 @@ fn rona_h_data_structure() {
 fn rona_h_a_combo_and_prefix() {
     let layout = load("data/layouts/一打鍵ローマ字入力「ローナ」.txt");
     let mut chord = vec![KeyCode::H, KeyCode::A];
-    rmap_core::layout::canon_sort(&mut chord);
+    sloth_core::layout::canon_sort(&mut chord);
     let expected = layout
         .combos
         .get(&chord)
@@ -729,7 +729,7 @@ fn rona_no_single_key_combos() {
 fn rona_gl_no_combo() {
     let layout = load("data/layouts/一打鍵ローマ字入力「ローナ」.txt");
     let mut chord = vec![KeyCode::G, KeyCode::L];
-    rmap_core::layout::canon_sort(&mut chord);
+    sloth_core::layout::canon_sort(&mut chord);
     assert!(
         !layout.combos.contains_key(&chord),
         "G+L combo should not exist; ガ行 grid has empty L position"
@@ -785,7 +785,7 @@ fn rona_prefix_ka_row() {
 fn rona_combo_ka_k_first() {
     let layout = load("data/layouts/一打鍵ローマ字入力「ローナ」.txt");
     let mut chord = vec![KeyCode::K, KeyCode::A];
-    rmap_core::layout::canon_sort(&mut chord);
+    sloth_core::layout::canon_sort(&mut chord);
     let expected = layout
         .combos
         .get(&chord)
@@ -804,7 +804,7 @@ fn rona_combo_ka_k_first() {
 fn rona_combo_ka_a_first() {
     let layout = load("data/layouts/一打鍵ローマ字入力「ローナ」.txt");
     let mut chord = vec![KeyCode::K, KeyCode::A];
-    rmap_core::layout::canon_sort(&mut chord);
+    sloth_core::layout::canon_sort(&mut chord);
     let expected = layout
         .combos
         .get(&chord)
@@ -1130,7 +1130,7 @@ fn rona_gga_sequence() {
 fn rona_combo_release_order_invariant_no_leak() {
     let layout = load("data/layouts/一打鍵ローマ字入力「ローナ」.txt");
     let mut chord = vec![KeyCode::S, KeyCode::A];
-    rmap_core::layout::canon_sort(&mut chord);
+    sloth_core::layout::canon_sort(&mut chord);
     let expected = layout.combos.get(&chord).expect("S+A combo").clone();
 
     let mut m = InputMatcher::default();

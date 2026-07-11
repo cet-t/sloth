@@ -1,5 +1,5 @@
 [package]
-name = "rmap-core"
+name = "sloth-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -24,6 +24,7 @@ windows = { version = "0.52", features = [
     "Win32_Security",
 ] }
 
-[dev-dependencies]
-dvorakj-parser = { path = "../dvorakj-parser" }
-# For tests, criterion later for NFR-1
+# Integration tests that need the DvorakJ parser + adapter live in the
+# `sloth-dvorakj-adapter` crate (sloth-core stays parser-agnostic).
+# [dev-dependencies]
+# criterion later for NFR-1

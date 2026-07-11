@@ -1,5 +1,11 @@
 [workspace]
-members = ["rmap-core", "dvorakj-parser", "rmap-daemon", "rmap-config"]
+members = [
+  "sloth-core",
+  "dvorakj-parser",
+  "sloth-dvorakj-adapter",
+  "sloth-daemon",
+  "sloth-config",
+]
 resolver = "2"
 
 [workspace.package]
@@ -7,13 +13,13 @@ version = "0.1.1"
 edition = "2021"
 license = "NYSL-0.9982"
 authors = ["cet-t"]
-repository = "https://github.com/cet-t/rmap"
+repository = "https://github.com/cet-t/sloth"
 
 [workspace.dependencies]
 # Core shared deps (add as needed)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "1"
+thiserror = "2"
 anyhow = "1"
 bitflags = "2"
 clap = { version = "4", features = ["derive"] }
@@ -25,3 +31,15 @@ lto = true
 codegen-units = 1
 strip = true
 opt-level = "z"   # size for daemon <10MiB target
+
+# --- cargo-dist (multi-platform release & installers) ---
+[workspace.metadata.dist]
+cargo-dist-version = "0.9.0"
+ci = ["github"]
+# Phase 1: Windows only. Add darwin/linux targets in later phases.
+targets = ["x86_64-pc-windows-msvc"]
+# No installers yet (just signed binaries + zip). Add "msi"/"deb"/"pkg" later.
+installers = []
+# Release is created by our custom workflow (sign + cosign + softprops),
+# so cargo-dist does not manage hosting here.
+hosting = []

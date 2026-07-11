@@ -1,20 +1,23 @@
 //! Main DvorakJ layout parser: orchestrates block, grid, cell, and keymap
-//! modules to build a [`Layout`] from pre-processed text lines.
+//! modules to build a [`ParsedLayout`] from pre-processed text lines.
 
-use rmap_core::{
-    layout::{Layout, LayoutMode},
-    loader::LoadError,
-    InputMode, KeyCode, KeyboardLayout, Modifiers, OutputToken,
-};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::block::{
-    extract_block, extract_block_from_last_bracket, is_self_marker, key_sort, normalize_layer_name,
+    extract_block, extract_block_from_last_bracket, is_self_marker, normalize_layer_name,
     parse_block_layer_names, split_tap_row,
 };
-use crate::cell::{compile_cell, KanaEncoder};
+use crate::cell::compile_cell;
 use crate::grid::parse_grid;
-use crate::keymap::keycode_from_scancode;
+use crate::keymap::key_from_scancode;
+use crate::model::{
+    sort_keys_by_rank, sort_keys_canonical, InputMode, Key, KeyChord, KeyboardLayout, LayoutMode,
+    Modifiers, OutputSeq, OutputToken, ParseError, ParseOptions, ParseReport, ParseResult,
+    ParseWarning, ParsedLayout,
+};
+
+/// Grid type produced by [`parse_grid`]: physical key → output sequence.
+type Grid = BTreeMap<Key, OutputSeq>;
 
 fn detect_mode(first_line: &str) -> LayoutMode {
     let has_sequential = first_line.contains('順');
@@ -55,21 +58,21 @@ fn parse_bracket_names(header: &str) -> Vec<String> {
     names
 }
 
-fn resolve_trigger(trig: &str) -> Result<KeyCode, LoadError> {
-    if let Some(kc) = KeyCode::from_dvorakj_name(trig) {
-        return Ok(kc);
+fn resolve_trigger(trig: &str) -> Option<Key> {
+    if let Some(k) = Key::from_dvorakj_name(trig) {
+        return Some(k);
     }
     if let Ok(code) = u32::from_str_radix(trig, 16) {
-        if let Some(kc) = keycode_from_scancode(code) {
-            return Ok(kc);
+        if let Some(k) = key_from_scancode(code) {
+            return Some(k);
         }
     }
-    Err(LoadError::UnknownTrigger(trig.to_string()))
+    None
 }
 
 /// Resolved trigger from `-option-input`.
 struct TriggerSpec {
-    key: KeyCode,
+    key: Key,
     /// The `(` form was present — this name supports simultaneous (combo) routing.
     has_combo: bool,
 }
@@ -79,10 +82,7 @@ struct TriggerSpec {
 /// Handles formats: `-10` (scancode), `[k]` (name ref), `[k], ([k]` (compound),
 /// `[k][y]` (multi-key sequence), `([q]` (paren-only ref).
 /// Returns `None` for multi-key-only entries (no single-key alternative).
-fn resolve_trigger_spec(
-    spec: &str,
-    layer_triggers: &HashMap<String, KeyCode>,
-) -> Result<Option<TriggerSpec>, LoadError> {
+fn resolve_trigger_spec(spec: &str, layer_triggers: &BTreeMap<String, Key>) -> Option<TriggerSpec> {
     let has_combo = spec.contains('(');
     for part in spec.split(',') {
         let part = part.trim().trim_start_matches('(');
@@ -93,8 +93,8 @@ fn resolve_trigger_spec(
             }
             if let Some(name) = part.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
                 let name = name.trim();
-                if let Some(&kc) = layer_triggers.get(name) {
-                    return Ok(Some(TriggerSpec { key: kc, has_combo }));
+                if let Some(&k) = layer_triggers.get(name) {
+                    return Some(TriggerSpec { key: k, has_combo });
                 }
             }
             continue;
@@ -102,43 +102,39 @@ fn resolve_trigger_spec(
 
         let trig = part.trim_start_matches('-');
         if !trig.is_empty() {
-            if let Ok(kc) = resolve_trigger(trig) {
-                return Ok(Some(TriggerSpec { key: kc, has_combo }));
+            if let Some(k) = resolve_trigger(trig) {
+                return Some(TriggerSpec { key: k, has_combo });
             }
         }
     }
-    Ok(None)
+    None
 }
 
-pub(crate) fn parse_dvorakj(
-    text: &str,
-    id: &str,
-    encoder: &KanaEncoder,
-    keyboard: KeyboardLayout,
-) -> Result<Layout, LoadError> {
+/// Parse pre-processed (comment-stripped) text into a [`ParseReport`].
+pub(crate) fn parse_report(text: &str, options: &ParseOptions) -> ParseResult<ParseReport> {
+    let keyboard = options.keyboard;
     let lines: Vec<&str> = text.lines().collect();
-    let mut layout = Layout {
-        id: id.to_string(),
-        name: id.to_string(),
+    let mut warnings: Vec<ParseWarning> = vec![];
+    let mut layout = ParsedLayout {
+        source_id: options.source_id.clone(),
+        name: options.source_id.clone().unwrap_or_default(),
         mode: LayoutMode::default(),
         input_mode: InputMode::Direct,
-        single_map: HashMap::new(),
-        layer_maps: HashMap::new(),
-        layer_taps: HashMap::new(),
-        layer_triggers: std::collections::HashSet::new(),
-        combos: HashMap::new(),
-        combo_keys: std::collections::HashSet::new(),
-        sustained_triggers: std::collections::HashSet::new(),
-        prefix_maps: HashMap::new(),
-        prefix_triggers: std::collections::HashSet::new(),
-        simultaneous: vec![],
         keyboard,
+        single_map: BTreeMap::new(),
+        layer_maps: BTreeMap::new(),
+        layer_taps: BTreeMap::new(),
+        layer_triggers: BTreeSet::new(),
+        combos: BTreeMap::new(),
+        combo_keys: BTreeSet::new(),
+        sustained_triggers: BTreeSet::new(),
+        prefix_maps: BTreeMap::new(),
+        prefix_triggers: BTreeSet::new(),
     };
-    let mut layer_triggers: HashMap<String, KeyCode> = HashMap::new();
-    let mut sustained_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut combo_capable_names: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    layer_triggers.insert("shift".to_string(), KeyCode::ShiftL);
+    let mut layer_triggers: BTreeMap<String, Key> = BTreeMap::new();
+    let mut sustained_names: BTreeSet<String> = BTreeSet::new();
+    let mut combo_capable_names: BTreeSet<String> = BTreeSet::new();
+    layer_triggers.insert("shift".to_string(), Key::ShiftL);
     sustained_names.insert("shift".to_string());
     let mut base_row_count = 0usize;
     let mut i = 0usize;
@@ -167,8 +163,18 @@ pub(crate) fn parse_dvorakj(
                 for bl in body {
                     if let Some((lname, trig_raw)) = bl.split_once('|') {
                         let lname = normalize_layer_name(lname);
-                        let Some(spec) = resolve_trigger_spec(trig_raw.trim(), &layer_triggers)?
-                        else {
+                        let trig_raw = trig_raw.trim();
+                        let Some(spec) = resolve_trigger_spec(trig_raw, &layer_triggers) else {
+                            if options.strict {
+                                return Err(ParseError::UnknownTrigger {
+                                    value: trig_raw.to_string(),
+                                    line: Some(i),
+                                });
+                            }
+                            warnings.push(ParseWarning::UnknownTrigger {
+                                value: trig_raw.to_string(),
+                                line: Some(i),
+                            });
                             continue;
                         };
                         layer_triggers.insert(lname.clone(), spec.key);
@@ -195,64 +201,27 @@ pub(crate) fn parse_dvorakj(
                 let header = &line[..last_open];
                 let names = parse_bracket_names(header);
                 if !names.is_empty() {
-                    let mut layer_ks: Vec<KeyCode> = Vec::with_capacity(names.len());
-                    let mut missing: Vec<String> = vec![];
-                    for n in &names {
-                        if let Some(kc) = layer_triggers.get(n) {
-                            layer_ks.push(*kc);
-                        } else if let Some(kc) = u32::from_str_radix(n, 16)
-                            .ok()
-                            .and_then(keycode_from_scancode)
-                        {
-                            layer_triggers.insert(n.clone(), kc);
-                            layer_ks.push(kc);
-                        } else {
-                            missing.push(n.clone());
-                        }
-                    }
-                    if !missing.is_empty() {
+                    let Some(layer_ks) =
+                        resolve_layer_keys(&names, &mut layer_triggers, options, i, &mut warnings)?
+                    else {
                         i = end + 1;
                         continue;
-                    }
-                    layer_ks.sort_by_key(|k| key_sort(*k));
+                    };
 
                     let (grid_body, tap_cell) = split_tap_row(&body);
                     let total_rows = base_row_count.max(grid_body.len());
                     let offset = total_rows.saturating_sub(grid_body.len());
-                    let grid = parse_grid(grid_body, encoder, InputMode::Direct, offset, keyboard)?;
+                    let grid = parse_grid(grid_body, offset, keyboard);
 
-                    for (n, &kc) in names.iter().zip(layer_ks.iter()) {
-                        let tap_seq = match &tap_cell {
-                            Some(cell) if is_self_marker(cell, &names) => {
-                                vec![OutputToken::Key {
-                                    code: kc,
-                                    mods: Modifiers::empty(),
-                                }]
-                            }
-                            Some(cell) => compile_cell(cell, InputMode::Direct, encoder, keyboard)?,
-                            None if names.len() == 1 => {
-                                layout.single_map.get(&kc).cloned().unwrap_or_else(|| {
-                                    vec![OutputToken::Key {
-                                        code: kc,
-                                        mods: Modifiers::empty(),
-                                    }]
-                                })
-                            }
-                            None => vec![],
-                        };
-                        if !tap_seq.is_empty() {
-                            layout.layer_taps.entry(kc).or_insert(tap_seq);
-                        }
-                        let _ = n;
-                    }
+                    apply_layer_taps(&names, &layer_ks, &tap_cell, keyboard, &mut layout);
 
                     let is_sustained = names.iter().all(|n| sustained_names.contains(n));
                     let is_combo_cap = names.iter().any(|n| combo_capable_names.contains(n));
                     let route = determine_route(layout.mode, is_sustained, false, is_combo_cap);
 
                     apply_route(&route, &layer_ks, grid, &mut layout);
-                    for k in layer_ks {
-                        layout.layer_triggers.insert(k);
+                    for k in &layer_ks {
+                        layout.layer_triggers.insert(*k);
                     }
                     i = end + 1;
                     continue;
@@ -264,7 +233,7 @@ pub(crate) fn parse_dvorakj(
         if line.starts_with('[') {
             if let Some((body, end)) = extract_block(&lines, i) {
                 base_row_count = body.len();
-                let grid = parse_grid(&body, encoder, InputMode::Direct, 0, keyboard)?;
+                let grid = parse_grid(&body, 0, keyboard);
                 layout.single_map = grid;
                 i = end + 1;
                 continue;
@@ -288,56 +257,19 @@ pub(crate) fn parse_dvorakj(
                     i += 1;
                     continue;
                 }
-                let mut layer_ks: Vec<KeyCode> = Vec::with_capacity(names.len());
-                let mut missing: Vec<String> = vec![];
-                for n in &names {
-                    if let Some(kc) = layer_triggers.get(n) {
-                        layer_ks.push(*kc);
-                    } else if let Some(kc) = u32::from_str_radix(n, 16)
-                        .ok()
-                        .and_then(keycode_from_scancode)
-                    {
-                        layer_triggers.insert(n.clone(), kc);
-                        layer_ks.push(kc);
-                    } else {
-                        missing.push(n.clone());
-                    }
-                }
-                if !missing.is_empty() {
+                let Some(layer_ks) =
+                    resolve_layer_keys(&names, &mut layer_triggers, options, i, &mut warnings)?
+                else {
                     i = end + 1;
                     continue;
-                }
-                layer_ks.sort_by_key(|k| key_sort(*k));
+                };
 
                 let (grid_body, tap_cell) = split_tap_row(&body);
                 let total_rows = base_row_count.max(grid_body.len());
                 let offset = total_rows.saturating_sub(grid_body.len());
-                let grid = parse_grid(grid_body, encoder, InputMode::Direct, offset, keyboard)?;
+                let grid = parse_grid(grid_body, offset, keyboard);
 
-                for (n, &kc) in names.iter().zip(layer_ks.iter()) {
-                    let tap_seq = match &tap_cell {
-                        Some(cell) if is_self_marker(cell, &names) => {
-                            vec![OutputToken::Key {
-                                code: kc,
-                                mods: Modifiers::empty(),
-                            }]
-                        }
-                        Some(cell) => compile_cell(cell, InputMode::Direct, encoder, keyboard)?,
-                        None if names.len() == 1 => {
-                            layout.single_map.get(&kc).cloned().unwrap_or_else(|| {
-                                vec![OutputToken::Key {
-                                    code: kc,
-                                    mods: Modifiers::empty(),
-                                }]
-                            })
-                        }
-                        None => vec![],
-                    };
-                    if !tap_seq.is_empty() {
-                        layout.layer_taps.entry(kc).or_insert(tap_seq);
-                    }
-                    let _ = n;
-                }
+                apply_layer_taps(&names, &layer_ks, &tap_cell, keyboard, &mut layout);
 
                 let is_sustained = names.iter().all(|n| sustained_names.contains(n));
                 let is_combo_cap = names.iter().any(|n| combo_capable_names.contains(n));
@@ -352,7 +284,74 @@ pub(crate) fn parse_dvorakj(
         i += 1;
     }
 
-    Ok(layout)
+    Ok(ParseReport { layout, warnings })
+}
+
+/// Resolve a block's layer names to keys, registering scan-code names as we go.
+/// Returns `None` (block should be skipped) if any name is unresolvable in
+/// lenient mode; errors in strict mode. The returned vec is rank-sorted to
+/// match the legacy `key_sort` ordering.
+fn resolve_layer_keys(
+    names: &[String],
+    layer_triggers: &mut BTreeMap<String, Key>,
+    options: &ParseOptions,
+    line: usize,
+    warnings: &mut Vec<ParseWarning>,
+) -> ParseResult<Option<Vec<Key>>> {
+    let mut layer_ks: Vec<Key> = Vec::with_capacity(names.len());
+    for n in names {
+        if let Some(k) = layer_triggers.get(n) {
+            layer_ks.push(*k);
+        } else if let Some(k) = u32::from_str_radix(n, 16).ok().and_then(key_from_scancode) {
+            layer_triggers.insert(n.clone(), k);
+            layer_ks.push(k);
+        } else {
+            if options.strict {
+                return Err(ParseError::MalformedBlock {
+                    line: Some(line),
+                    message: format!("undefined layer name '{n}'"),
+                });
+            }
+            warnings.push(ParseWarning::MissingLayer {
+                name: n.clone(),
+                line: Some(line),
+            });
+            return Ok(None);
+        }
+    }
+    sort_keys_by_rank(&mut layer_ks);
+    Ok(Some(layer_ks))
+}
+
+/// Assign `layer_taps` for a block's trigger keys (self-marker, explicit tap
+/// cell, single-name base fallback, or none). Mirrors the legacy logic.
+fn apply_layer_taps(
+    names: &[String],
+    layer_ks: &[Key],
+    tap_cell: &Option<String>,
+    keyboard: KeyboardLayout,
+    layout: &mut ParsedLayout,
+) {
+    for (n, &k) in names.iter().zip(layer_ks.iter()) {
+        let tap_seq = match tap_cell {
+            Some(cell) if is_self_marker(cell, names) => vec![OutputToken::Key {
+                code: k,
+                mods: Modifiers::empty(),
+            }],
+            Some(cell) => compile_cell(cell, keyboard),
+            None if names.len() == 1 => layout.single_map.get(&k).cloned().unwrap_or_else(|| {
+                vec![OutputToken::Key {
+                    code: k,
+                    mods: Modifiers::empty(),
+                }]
+            }),
+            None => vec![],
+        };
+        if !tap_seq.is_empty() {
+            layout.layer_taps.entry(k).or_insert(tap_seq);
+        }
+        let _ = n;
+    }
 }
 
 enum BlockRoute {
@@ -362,15 +361,12 @@ enum BlockRoute {
     PrefixAndCombo,
 }
 
-fn apply_route(
-    route: &BlockRoute,
-    layer_ks: &[KeyCode],
-    grid: HashMap<KeyCode, Vec<OutputToken>>,
-    layout: &mut Layout,
-) {
+fn apply_route(route: &BlockRoute, layer_ks: &[Key], grid: Grid, layout: &mut ParsedLayout) {
     match route {
         BlockRoute::Sustained => {
-            layout.layer_maps.insert(layer_ks.to_vec(), grid);
+            layout
+                .layer_maps
+                .insert(KeyChord::from_vec(layer_ks.to_vec()), grid);
             for &k in layer_ks {
                 layout.sustained_triggers.insert(k);
             }
@@ -382,20 +378,25 @@ fn apply_route(
                 }
                 let mut chord = layer_ks.to_vec();
                 chord.push(content);
-                rmap_core::layout::canon_sort(&mut chord);
-                layout.combos.entry(chord).or_insert_with(|| out.clone());
+                sort_keys_canonical(&mut chord);
+                layout
+                    .combos
+                    .entry(KeyChord::from_vec(chord))
+                    .or_insert_with(|| out.clone());
                 layout.combo_keys.insert(content);
             }
             for &k in layer_ks {
                 layout.combo_keys.insert(k);
             }
-            layout.layer_maps.insert(layer_ks.to_vec(), grid);
+            layout
+                .layer_maps
+                .insert(KeyChord::from_vec(layer_ks.to_vec()), grid);
         }
         BlockRoute::Prefix => {
             for &k in layer_ks {
                 layout
                     .prefix_maps
-                    .entry(vec![k])
+                    .entry(KeyChord::from_vec(vec![k]))
                     .or_insert_with(|| grid.clone());
                 layout.prefix_triggers.insert(k);
             }
@@ -407,15 +408,18 @@ fn apply_route(
                 }
                 let mut chord = layer_ks.to_vec();
                 chord.push(content);
-                rmap_core::layout::canon_sort(&mut chord);
-                layout.combos.entry(chord).or_insert_with(|| out.clone());
+                sort_keys_canonical(&mut chord);
+                layout
+                    .combos
+                    .entry(KeyChord::from_vec(chord))
+                    .or_insert_with(|| out.clone());
                 layout.combo_keys.insert(content);
             }
             for &k in layer_ks {
                 layout.combo_keys.insert(k);
                 layout
                     .prefix_maps
-                    .entry(vec![k])
+                    .entry(KeyChord::from_vec(vec![k]))
                     .or_insert_with(|| grid.clone());
                 layout.prefix_triggers.insert(k);
             }

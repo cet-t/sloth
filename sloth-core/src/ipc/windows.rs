@@ -1,8 +1,8 @@
 //! Windows named pipe IPC.
-//! Length-prefixed (u32 LE) JSON messages over `\\.\pipe\rmap`, one
+//! Length-prefixed (u32 LE) JSON messages over `\\.\pipe\sloth`, one
 //! request/response per connection. The server runs on its own thread and
 //! accepts connections sequentially (the daemon only expects occasional
-//! control messages from rmap-config, so this is sufficient).
+//! control messages from sloth-config, so this is sufficient).
 
 use super::{IpcCommand, IpcResponse};
 use std::time::Duration;
@@ -20,7 +20,7 @@ use windows::Win32::System::Pipes::{
     PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 
-const PIPE_NAME: &str = r"\\.\pipe\rmap";
+const PIPE_NAME: &str = r"\\.\pipe\sloth";
 const BUF_SIZE: u32 = 4096;
 
 fn to_wide(s: &str) -> Vec<u16> {

@@ -1,71 +1,68 @@
 //! DvorakJ layout file parser.
 //!
-//! Parses DvorakJ-style `.txt` layout files (Shift-JIS / UTF-8) into the
-//! [`rmap_core::layout::Layout`] structure.  This crate is intentionally
-//! separated from `rmap-core` so that the parser can be reused or replaced
-//! independently of the core engine.
+//! Parses DvorakJ-style `.txt` layout files into a dependency-free
+//! [`ParsedLayout`]. The default (rlib) build has zero external dependencies
+//! and accepts already-decoded `&str`. Conversion to `sloth_core::layout::Layout`
+//! lives in the separate `sloth-dvorakj-adapter` crate.
+//!
+//! # Features
+//! - `encoding`: adds [`parse_bytes`] (Shift-JIS/UTF-8 decode via `encoding_rs`).
+//! - `json`: serde-based JSON serialization of [`ParseReport`].
+//! - `ffi`: C ABI layer for single-file DLL/SO use (implies `json`).
 
 mod block;
 mod cell;
 mod grid;
 mod keymap;
+mod model;
 mod parse;
 
-use cell::KanaEncoder;
-use rmap_core::{
-    layout::Layout,
-    loader::{LayoutLoader, LoadError},
-    KeyboardLayout,
+pub use model::{
+    canonical_key_order, sort_keys_canonical, InputMode, Key, KeyChord, KeyboardLayout, LayoutMode,
+    Modifiers, OutputSeq, OutputToken, ParseError, ParseOptions, ParseReport, ParseResult,
+    ParseWarning, ParsedLayout, SpecialKey,
 };
 
-pub struct DvorakJLayoutLoader {
-    kana_encoder: KanaEncoder,
+#[cfg(feature = "encoding")]
+pub mod decode;
+#[cfg(feature = "encoding")]
+pub use decode::parse_bytes;
+
+#[cfg(feature = "json")]
+pub mod json;
+
+#[cfg(feature = "ffi")]
+pub mod ffi;
+
+/// Parse an already-decoded DvorakJ layout string into a [`ParseReport`].
+///
+/// Comment blocks (`/* … */`) are stripped internally, matching the legacy
+/// loader. In lenient mode (`options.strict == false`) unknown triggers and
+/// undefined layers are skipped and recorded in [`ParseReport::warnings`].
+pub fn parse_str(text: &str, options: ParseOptions) -> ParseResult<ParseReport> {
+    let stripped = strip_comments(text);
+    parse::parse_report(&stripped, &options)
 }
 
-impl DvorakJLayoutLoader {
-    pub fn new() -> Self {
-        Self {
-            kana_encoder: KanaEncoder,
-        }
+/// A reusable parser that holds [`ParseOptions`].
+#[derive(Debug, Clone)]
+pub struct DvorakJParser {
+    options: ParseOptions,
+}
+
+impl DvorakJParser {
+    pub fn new(options: ParseOptions) -> Self {
+        Self { options }
+    }
+
+    pub fn parse_str(&self, text: &str) -> ParseResult<ParseReport> {
+        parse_str(text, self.options.clone())
     }
 }
 
-impl Default for DvorakJLayoutLoader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LayoutLoader for DvorakJLayoutLoader {
-    fn format_name(&self) -> &'static str {
-        "dvorakj"
-    }
-
-    fn load(&self, bytes: &[u8], id: &str) -> Result<Layout, LoadError> {
-        let (keyboard, text) = if id.ends_with(".en.txt") {
-            (
-                KeyboardLayout::Us,
-                String::from_utf8_lossy(bytes).into_owned(),
-            )
-        } else if id.ends_with(".jp.txt") {
-            (
-                KeyboardLayout::Jis,
-                encoding_rs::SHIFT_JIS.decode(bytes).0.into_owned(),
-            )
-        } else {
-            let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-            let text = match std::str::from_utf8(bytes) {
-                Ok(s) => s.to_string(),
-                Err(_) => encoding_rs::SHIFT_JIS.decode(bytes).0.into_owned(),
-            };
-            (KeyboardLayout::Jis, text)
-        };
-        let stripped = strip_comments(&text);
-        parse::parse_dvorakj(&stripped, id, &self.kana_encoder, keyboard)
-    }
-}
-
-fn strip_comments(text: &str) -> String {
+/// Strip C-style `/* … */` comment blocks. Single pass; nested comments are not
+/// supported (DvorakJ files use a single layer).
+pub(crate) fn strip_comments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut it = text.chars().peekable();
     while let Some(c) = it.next() {

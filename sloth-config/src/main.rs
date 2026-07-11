@@ -1,17 +1,17 @@
 #![windows_subsystem = "windows"]
-//! rmap-config: settings window (Slint GUI). Edits the fields that exist in
-//! `data/config.json` (rmap_core::config::AppConfig) and writes them back.
+//! sloth-config: settings window (Slint GUI). Edits the fields that exist in
+//! `data/config.json` (sloth_core::config::AppConfig) and writes them back.
 //!
 //! Usage:
-//!   rmap-config            -> open settings window
-//!   rmap-config reload     -> send IPC reload to the running daemon (CLI helper)
-//!   rmap-config status     -> (stub)
-//!   rmap-config quit       -> (stub)
+//!   sloth-config            -> open settings window
+//!   sloth-config reload     -> send IPC reload to the running daemon (CLI helper)
+//!   sloth-config status     -> (stub)
+//!   sloth-config quit       -> (stub)
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use rmap_core::config::AppConfig;
-use rmap_core::ipc::{send_command, send_reload_command, IpcCommand, IpcResponse};
+use sloth_core::config::AppConfig;
+use sloth_core::ipc::{send_command, send_reload_command, IpcCommand, IpcResponse};
 use slint::{Model, VecModel};
 use std::path::Path;
 use std::rc::Rc;
@@ -71,7 +71,7 @@ fn focus_existing_window() -> bool {
         FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
     };
 
-    let title: Vec<u16> = "rmap 設定"
+    let title: Vec<u16> = "sloth 設定"
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
@@ -130,7 +130,7 @@ impl raw_window_handle::HasDisplayHandle for HwndParent {
 fn settings_window_parent() -> Option<HwndParent> {
     use windows::core::PCWSTR;
     use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
-    let title: Vec<u16> = "rmap 設定"
+    let title: Vec<u16> = "sloth 設定"
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
@@ -594,7 +594,7 @@ fn spawn_always_on_top() {
     const WINDOW_H: i32 = 480;
 
     std::thread::spawn(move || {
-        let title: Vec<u16> = "rmap 設定"
+        let title: Vec<u16> = "sloth 設定"
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();

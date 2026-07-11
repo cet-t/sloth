@@ -1,22 +1,11 @@
 //! Cell compilation: text/token → OutputToken sequence.
 
-use rmap_core::{
-    loader::LoadError, InputMode, KeyCode, KeyboardLayout, Modifiers, OutputSeq, OutputToken,
-    SpecialKey,
-};
+use crate::model::{Key, KeyboardLayout, Modifiers, OutputSeq, OutputToken, SpecialKey};
 
-pub(crate) fn compile_cell(
-    cell: &str,
-    mode: InputMode,
-    encoder: &KanaEncoder,
-    keyboard: KeyboardLayout,
-) -> Result<OutputSeq, LoadError> {
+pub(crate) fn compile_cell(cell: &str, keyboard: KeyboardLayout) -> OutputSeq {
     let c = cell.trim();
     if c.is_empty() || c == "@@@" {
-        return Ok(vec![]);
-    }
-    if mode == InputMode::Romaji && !c.contains('{') {
-        return Ok(encoder.encode(c, mode));
+        return vec![];
     }
     let mut seq = vec![];
     let mut chars = c.chars().peekable();
@@ -43,7 +32,7 @@ pub(crate) fn compile_cell(
             seq.push(key_or_text(ch, keyboard));
         }
     }
-    Ok(seq)
+    seq
 }
 
 fn brace_token(inner: &str, keyboard: KeyboardLayout) -> OutputToken {
@@ -58,7 +47,7 @@ fn brace_token(inner: &str, keyboard: KeyboardLayout) -> OutputToken {
         "up" => OutputToken::Named(SpecialKey::Up),
         "down" => OutputToken::Named(SpecialKey::Down),
         "space" => OutputToken::Key {
-            code: KeyCode::Space,
+            code: Key::Space,
             mods: Modifiers::empty(),
         },
         "pipe" | "bar" => OutputToken::Text("|".to_string()),
@@ -71,8 +60,8 @@ pub(crate) fn key_or_text(ch: char, keyboard: KeyboardLayout) -> OutputToken {
     if keyboard == KeyboardLayout::Us && !ch.is_ascii_alphanumeric() {
         return OutputToken::Text(ch.to_string());
     }
-    let code = ascii_to_keycode(ch);
-    if matches!(code, KeyCode::Unknown(_)) {
+    let code = ascii_to_key(ch);
+    if matches!(code, Key::Unknown(_)) {
         OutputToken::Text(ch.to_string())
     } else {
         let mods = if ch.is_ascii_uppercase() {
@@ -84,82 +73,58 @@ pub(crate) fn key_or_text(ch: char, keyboard: KeyboardLayout) -> OutputToken {
     }
 }
 
-pub(crate) fn ascii_to_keycode(c: char) -> KeyCode {
+pub(crate) fn ascii_to_key(c: char) -> Key {
     match c.to_ascii_lowercase() {
-        'a' => KeyCode::A,
-        'b' => KeyCode::B,
-        'c' => KeyCode::C,
-        'd' => KeyCode::D,
-        'e' => KeyCode::E,
-        'f' => KeyCode::F,
-        'g' => KeyCode::G,
-        'h' => KeyCode::H,
-        'i' => KeyCode::I,
-        'j' => KeyCode::J,
-        'k' => KeyCode::K,
-        'l' => KeyCode::L,
-        'm' => KeyCode::M,
-        'n' => KeyCode::N,
-        'o' => KeyCode::O,
-        'p' => KeyCode::P,
-        'q' => KeyCode::Q,
-        'r' => KeyCode::R,
-        's' => KeyCode::S,
-        't' => KeyCode::T,
-        'u' => KeyCode::U,
-        'v' => KeyCode::V,
-        'w' => KeyCode::W,
-        'x' => KeyCode::X,
-        'y' => KeyCode::Y,
-        'z' => KeyCode::Z,
-        '0' => KeyCode::Num0,
-        '1' => KeyCode::Num1,
-        '2' => KeyCode::Num2,
-        '3' => KeyCode::Num3,
-        '4' => KeyCode::Num4,
-        '5' => KeyCode::Num5,
-        '6' => KeyCode::Num6,
-        '7' => KeyCode::Num7,
-        '8' => KeyCode::Num8,
-        '9' => KeyCode::Num9,
-        '-' => KeyCode::Minus,
-        '=' => KeyCode::Equal,
-        '[' => KeyCode::LBracket,
-        ']' => KeyCode::RBracket,
-        '\\' => KeyCode::Backslash,
-        ';' => KeyCode::Semicolon,
-        '\'' => KeyCode::Quote,
-        ',' => KeyCode::Comma,
-        '.' => KeyCode::Dot,
-        '/' => KeyCode::Slash,
-        '`' => KeyCode::Grave,
-        ' ' => KeyCode::Space,
-        '\n' => KeyCode::Enter,
-        '\t' => KeyCode::Tab,
-        _ => KeyCode::Unknown(c as u32),
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct KanaEncoder;
-
-impl KanaEncoder {
-    pub(crate) fn encode(&self, s: &str, mode: InputMode) -> OutputSeq {
-        if mode == InputMode::Romaji {
-            s.chars()
-                .map(|c| {
-                    if c.is_ascii_alphabetic() {
-                        OutputToken::Key {
-                            code: ascii_to_keycode(c),
-                            mods: Modifiers::empty(),
-                        }
-                    } else {
-                        OutputToken::Text(c.to_string())
-                    }
-                })
-                .collect()
-        } else {
-            vec![OutputToken::Text(s.to_string())]
-        }
+        'a' => Key::A,
+        'b' => Key::B,
+        'c' => Key::C,
+        'd' => Key::D,
+        'e' => Key::E,
+        'f' => Key::F,
+        'g' => Key::G,
+        'h' => Key::H,
+        'i' => Key::I,
+        'j' => Key::J,
+        'k' => Key::K,
+        'l' => Key::L,
+        'm' => Key::M,
+        'n' => Key::N,
+        'o' => Key::O,
+        'p' => Key::P,
+        'q' => Key::Q,
+        'r' => Key::R,
+        's' => Key::S,
+        't' => Key::T,
+        'u' => Key::U,
+        'v' => Key::V,
+        'w' => Key::W,
+        'x' => Key::X,
+        'y' => Key::Y,
+        'z' => Key::Z,
+        '0' => Key::Num0,
+        '1' => Key::Num1,
+        '2' => Key::Num2,
+        '3' => Key::Num3,
+        '4' => Key::Num4,
+        '5' => Key::Num5,
+        '6' => Key::Num6,
+        '7' => Key::Num7,
+        '8' => Key::Num8,
+        '9' => Key::Num9,
+        '-' => Key::Minus,
+        '=' => Key::Equal,
+        '[' => Key::LBracket,
+        ']' => Key::RBracket,
+        '\\' => Key::Backslash,
+        ';' => Key::Semicolon,
+        '\'' => Key::Quote,
+        ',' => Key::Comma,
+        '.' => Key::Dot,
+        '/' => Key::Slash,
+        '`' => Key::Grave,
+        ' ' => Key::Space,
+        '\n' => Key::Enter,
+        '\t' => Key::Tab,
+        _ => Key::Unknown(c as u32),
     }
 }

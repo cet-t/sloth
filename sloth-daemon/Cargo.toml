@@ -1,16 +1,16 @@
 [package]
-name = "rmap-daemon"
+name = "sloth-daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "rmap"
+name = "sloth"
 path = "src/main.rs"
 
 [dependencies]
-rmap-core = { path = "../rmap-core" }
-dvorakj-parser = { path = "../dvorakj-parser" }
+sloth-core = { path = "../sloth-core" }
+sloth-dvorakj-adapter = { path = "../sloth-dvorakj-adapter" }
 anyhow = { workspace = true }
 tray-icon = "0.10"                    # for resident tray (prototype)
 notify = "6"                          # for config/layout hot reload (debounced)

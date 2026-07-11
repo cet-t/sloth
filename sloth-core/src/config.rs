@@ -117,7 +117,7 @@ pub fn keycodes_from_config_name(name: &str) -> Vec<KeyCode> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileDef {
-    pub layout: String, // path to DvorakJ .txt or later rmap-native
+    pub layout: String, // path to DvorakJ .txt or later sloth-native
     #[serde(default)]
     pub toggles: ProfileToggles,
 }

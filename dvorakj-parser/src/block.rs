@@ -1,8 +1,6 @@
 //! Block-level parsing helpers: `[…]` extraction, layer-name parsing,
 //! tap-row splitting.
 
-use rmap_core::KeyCode;
-
 pub(crate) fn extract_block(lines: &[&str], mut idx: usize) -> Option<(Vec<String>, usize)> {
     while idx < lines.len() && !lines[idx].contains('[') {
         idx += 1;
@@ -151,28 +149,4 @@ pub(crate) fn split_tap_row(body: &[String]) -> (&[String], Option<String>) {
         }
     }
     (body, None)
-}
-
-pub(crate) fn key_sort(k: KeyCode) -> u16 {
-    match k {
-        KeyCode::Space => 1,
-        KeyCode::ShiftL => 2,
-        KeyCode::ShiftR => 3,
-        KeyCode::CtrlL => 4,
-        KeyCode::CtrlR => 5,
-        KeyCode::AltL => 6,
-        KeyCode::AltR => 7,
-        KeyCode::MetaL => 8,
-        KeyCode::MetaR => 9,
-        KeyCode::Muhenkan => 10,
-        KeyCode::Henkan => 11,
-        KeyCode::KanaKatakana => 12,
-        KeyCode::HankakuZenkaku => 13,
-        KeyCode::Yen => 14,
-        KeyCode::Caret => 15,
-        KeyCode::Colon => 16,
-        KeyCode::AtSign => 17,
-        KeyCode::Unknown(_) => 200,
-        _ => 100,
-    }
 }

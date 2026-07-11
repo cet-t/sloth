@@ -1,7 +1,7 @@
 # Rust
 /target
 **/*.rs.bk
-# Cargo.lock is committed: this workspace ships binaries (rmap-daemon/-config),
+# Cargo.lock is committed: this workspace ships binaries (sloth-daemon/-config),
 # so a locked, reproducible dependency set is desirable.
 
 # OS

@@ -1,4 +1,4 @@
-//! rmap-core: shared types, layout loading, matching logic for the key remapper.
+//! sloth-core: shared types, layout loading, matching logic for the key remapper.
 //! Platform-neutral. Hooks live in platform crates/binaries.
 
 pub mod config;

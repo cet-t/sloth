@@ -1,0 +1,9 @@
+[package]
+name = "sloth-dvorakj-adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sloth-core = { path = "../sloth-core" }
+dvorakj-parser = { path = "../dvorakj-parser", features = ["encoding"] }

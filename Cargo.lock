@@ -1381,7 +1381,8 @@ name = "dvorakj-parser"
 version = "0.1.1"
 dependencies = [
  "encoding_rs",
- "rmap-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4620,14 +4621,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "rmap-config"
+name = "sloth-config"
 version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
  "raw-window-handle",
  "rfd",
- "rmap-core",
+ "sloth-core",
  "serde_json",
  "slint",
  "slint-build",
@@ -4635,28 +4636,35 @@ dependencies = [
 ]
 
 [[package]]
-name = "rmap-core"
+name = "sloth-core"
 version = "0.1.1"
 dependencies = [
  "anyhow",
  "bitflags 2.13.0",
- "dvorakj-parser",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "windows 0.52.0",
 ]
 
 [[package]]
-name = "rmap-daemon"
+name = "sloth-daemon"
 version = "0.1.1"
 dependencies = [
  "anyhow",
- "dvorakj-parser",
  "notify",
- "rmap-core",
+ "sloth-core",
+ "sloth-dvorakj-adapter",
  "tray-icon",
  "windows 0.52.0",
+]
+
+[[package]]
+name = "sloth-dvorakj-adapter"
+version = "0.1.1"
+dependencies = [
+ "dvorakj-parser",
+ "sloth-core",
 ]
 
 [[package]]

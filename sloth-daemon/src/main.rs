@@ -1,15 +1,15 @@
 #![windows_subsystem = "windows"]
-//! rmap-daemon: resident remapper. Owns hooks, applies layouts, IPC server, tray.
+//! sloth-daemon: resident remapper. Owns hooks, applies layouts, IPC server, tray.
 
 use anyhow::Result;
 use notify::event::EventKind;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use rmap_core::config::AppConfig;
-use rmap_core::hook::{
+use sloth_core::config::AppConfig;
+use sloth_core::hook::{
     install_and_run_windows_hook, is_suspended, reload_layout, set_suspend, toggle_suspend,
 };
-use rmap_core::ipc::start_ipc_server;
-use rmap_core::log;
+use sloth_core::ipc::start_ipc_server;
+use sloth_core::log;
 use std::path::Path;
 use std::time::Duration;
 use tray_icon::{
@@ -21,9 +21,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 fn main() -> Result<()> {
-    rmap_core::loader::register_default_loader(
-        Box::new(dvorakj_parser::DvorakJLayoutLoader::new()),
-    );
+    sloth_core::loader::register_default_loader(Box::new(
+        sloth_dvorakj_adapter::RmapDvorakJLayoutLoader::new(),
+    ));
 
     // Load config early so we know whether file logging is enabled (it must
     // be init'd before any log::log() call; install_and_run_windows_hook()
@@ -33,13 +33,13 @@ fn main() -> Result<()> {
     log::init(startup_cfg.enable_log);
     log::log("daemon starting");
 
-    println!("rmap-daemon (Windows prototype) starting real hook + tray + watcher...");
+    println!("sloth-daemon (Windows prototype) starting real hook + tray + watcher...");
     println!("Config: data/config.json (or falls back to embedded sample).");
     println!("Tray: right-click for 再生 / 停止 / 再起動 / 設定 / 終了. Layout changes also reload automatically on file watch.");
     println!("Live remap: Space+letter (per sample grid) -> shifted; Space tap -> Space.");
 
     if !Path::new("data/config.json").exists() {
-        rmap_core::notify!("note: data/config.json not found; using embedded layout");
+        sloth_core::notify!("note: data/config.json not found; using embedded layout");
     }
 
     // Start the low-level hook on its own thread (message pump for LL keyboard).
@@ -64,7 +64,7 @@ fn main() -> Result<()> {
     tray_menu.append(&quit_item).ok();
 
     let _tray = TrayIconBuilder::new()
-        .with_tooltip("rmap")
+        .with_tooltip("sloth")
         .with_icon(icon)
         .with_menu(Box::new(tray_menu))
         .build()
@@ -82,52 +82,52 @@ fn main() -> Result<()> {
     // IPC server (named pipe). On Reload command we call the same reload_layout used by tray.
     start_ipc_server(|cmd| {
         match cmd {
-            rmap_core::ipc::IpcCommand::Reload => {
-                rmap_core::notify!("IPC: reload");
+            sloth_core::ipc::IpcCommand::Reload => {
+                sloth_core::notify!("IPC: reload");
                 reload_layout();
-                rmap_core::ipc::IpcResponse::Ok
+                sloth_core::ipc::IpcResponse::Ok
             }
-            rmap_core::ipc::IpcCommand::Status => rmap_core::ipc::IpcResponse::Status {
+            sloth_core::ipc::IpcCommand::Status => sloth_core::ipc::IpcResponse::Status {
                 version: env!("CARGO_PKG_VERSION").into(),
                 active_app: String::new(),
                 suspended: is_suspended(),
             },
-            rmap_core::ipc::IpcCommand::Quit => {
-                rmap_core::notify!("IPC: quit requested");
+            sloth_core::ipc::IpcCommand::Quit => {
+                sloth_core::notify!("IPC: quit requested");
                 // Exit on its own thread after a short delay so the IPC
                 // response below reaches the client first (mirrors restart).
                 std::thread::spawn(|| {
                     std::thread::sleep(Duration::from_millis(200));
                     std::process::exit(0);
                 });
-                rmap_core::ipc::IpcResponse::Ok
+                sloth_core::ipc::IpcResponse::Ok
             }
             // FR-8: daemon control hotkeys / commands.
-            rmap_core::ipc::IpcCommand::Stop => {
-                rmap_core::notify!("IPC: stop (suspend remapping)");
+            sloth_core::ipc::IpcCommand::Stop => {
+                sloth_core::notify!("IPC: stop (suspend remapping)");
                 set_suspend(true);
-                rmap_core::ipc::IpcResponse::Ok
+                sloth_core::ipc::IpcResponse::Ok
             }
-            rmap_core::ipc::IpcCommand::Resume => {
-                rmap_core::notify!("IPC: resume remapping");
+            sloth_core::ipc::IpcCommand::Resume => {
+                sloth_core::notify!("IPC: resume remapping");
                 set_suspend(false);
-                rmap_core::ipc::IpcResponse::Ok
+                sloth_core::ipc::IpcResponse::Ok
             }
-            rmap_core::ipc::IpcCommand::ToggleRunning => {
+            sloth_core::ipc::IpcCommand::ToggleRunning => {
                 let now = toggle_suspend();
-                rmap_core::notify!(
+                sloth_core::notify!(
                     "IPC: toggle running -> {}",
                     if now { "stopped" } else { "running" }
                 );
-                rmap_core::ipc::IpcResponse::Ok
+                sloth_core::ipc::IpcResponse::Ok
             }
-            rmap_core::ipc::IpcCommand::Restart => {
-                rmap_core::notify!("IPC: restart requested");
+            sloth_core::ipc::IpcCommand::Restart => {
+                sloth_core::notify!("IPC: restart requested");
                 // Restart on its own thread: restart_daemon() spawns a fresh
                 // copy and exits this process, which we don't want to do from
                 // inside the IPC server's response handler.
                 std::thread::spawn(restart_daemon);
-                rmap_core::ipc::IpcResponse::Ok
+                sloth_core::ipc::IpcResponse::Ok
             }
         }
     });
@@ -145,18 +145,18 @@ fn main() -> Result<()> {
                 suspended = now_suspended;
                 toggle_item.set_text(if suspended { "再生" } else { "停止" });
                 if suspended {
-                    rmap_core::notify!("Tray: stop (remap paused)");
+                    sloth_core::notify!("Tray: stop (remap paused)");
                 } else {
-                    rmap_core::notify!("Tray: resume (remap resumed)");
+                    sloth_core::notify!("Tray: resume (remap resumed)");
                 }
             } else if event.id == restart_item.id() {
-                rmap_core::notify!("Tray: restart (restarting daemon)");
+                sloth_core::notify!("Tray: restart (restarting daemon)");
                 restart_daemon();
             } else if event.id == settings_item.id() {
-                rmap_core::notify!("Tray: settings (opening config)");
+                sloth_core::notify!("Tray: settings (opening config)");
                 open_settings();
             } else if event.id == quit_item.id() {
-                rmap_core::notify!("Tray: quit");
+                sloth_core::notify!("Tray: quit");
                 std::process::exit(0);
             }
         }
@@ -173,7 +173,7 @@ fn main() -> Result<()> {
                     s.ends_with(".txt") || s.ends_with("config.json")
                 });
                 if relevant {
-                    rmap_core::notify!("Watcher: layout/config change detected -> reload");
+                    sloth_core::notify!("Watcher: layout/config change detected -> reload");
                     reload_layout();
                 }
             }
@@ -220,27 +220,27 @@ fn restart_daemon() {
                     std::thread::sleep(Duration::from_millis(300));
                     std::process::exit(0);
                 }
-                Err(e) => rmap_core::notify_err!("restart failed (spawn): {e}"),
+                Err(e) => sloth_core::notify_err!("restart failed (spawn): {e}"),
             }
         }
-        Err(e) => rmap_core::notify_err!("restart failed (current_exe): {e}"),
+        Err(e) => sloth_core::notify_err!("restart failed (current_exe): {e}"),
     }
 }
 
-/// 設定: launch the rmap-config settings window (Slint GUI). Falls back to
+/// 設定: launch the sloth-config settings window (Slint GUI). Falls back to
 /// opening data/config.json in the OS default handler if the settings binary
 /// can't be found (e.g. not yet built next to the daemon).
 fn open_settings() {
-    let rmap_config = std::env::current_exe()
+    let sloth_config = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.join("rmap-config.exe")));
+        .and_then(|p| p.parent().map(|d| d.join("sloth-config.exe")));
 
-    if let Some(exe) = &rmap_config {
+    if let Some(exe) = &sloth_config {
         if exe.exists() {
             match std::process::Command::new(exe).spawn() {
                 Ok(_) => log::log(format!("settings: launched {}", exe.display())),
                 Err(e) => {
-                    rmap_core::notify_err!("settings: failed to launch {}: {e}", exe.display())
+                    sloth_core::notify_err!("settings: failed to launch {}: {e}", exe.display())
                 }
             }
             return;
@@ -264,7 +264,7 @@ fn open_settings() {
         .args(["/C", "start", "", target])
         .spawn()
     {
-        rmap_core::notify_err!("settings: failed to open {target}: {e}");
+        sloth_core::notify_err!("settings: failed to open {target}: {e}");
     }
 }
 

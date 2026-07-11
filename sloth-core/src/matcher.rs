@@ -191,7 +191,7 @@ impl InputMatcher {
         }
 
         // Global bypass (suspended / disable key / Ctrl|Alt|Win held): act as if
-        // rmap were off. Drop any half-formed chord so it can't inject mid-shortcut.
+        // sloth were off. Drop any half-formed chord so it can't inject mid-shortcut.
         if self.bypass_active() {
             self.clear_pending();
             // If a synthetic LSHIFT was held for SandS, release it before
