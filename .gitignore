@@ -4,6 +4,11 @@
 # Cargo.lock is committed: this workspace ships binaries (rmap-daemon/-config),
 # so a locked, reproducible dependency set is desirable.
 
+# dvorakj-parser is an independent crate (not a workspace member); it builds
+# its own target dir and, as a library, doesn't need a committed lockfile.
+dvorakj-parser/target
+dvorakj-parser/Cargo.lock
+
 # OS
 .DS_Store
 Thumbs.db

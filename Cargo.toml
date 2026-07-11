@@ -1,5 +1,6 @@
 [workspace]
-members = ["rmap-core", "dvorakj-parser", "rmap-daemon", "rmap-config"]
+members = ["rmap-core", "rmap-dvorakj-adapter", "rmap-daemon", "rmap-config"]
+exclude = ["dvorakj-parser"]
 resolver = "2"
 
 [workspace.package]
@@ -13,7 +14,7 @@ repository = "https://github.com/cet-t/rmap"
 # Core shared deps (add as needed)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "1"
+thiserror = "2"
 anyhow = "1"
 bitflags = "2"
 clap = { version = "4", features = ["derive"] }

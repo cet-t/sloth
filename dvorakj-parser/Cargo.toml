@@ -1,9 +1,22 @@
+[workspace]
+
 [package]
 name = "dvorakj-parser"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.1.1"
+edition = "2021"
+license = "NYSL-0.9982"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+encoding = ["dep:encoding_rs"]
+json = ["dep:serde", "dep:serde_json"]
+ffi = ["json"]
+cdylib-full = ["ffi", "encoding"]
 
 [dependencies]
-rmap-core = { path = "../rmap-core" }
-encoding_rs = "0.8"
+encoding_rs = { version = "0.8", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
