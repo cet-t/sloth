@@ -34,3 +34,4 @@ dist/
 token-optimizer/
 prompt.md
 .grok/
+cargo_fallback.log
