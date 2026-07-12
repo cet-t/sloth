@@ -13,6 +13,7 @@ pub mod matcher;
 pub mod modifiers;
 pub mod output;
 pub mod profile;
+pub mod sloth_parser;
 
 // Re-exports for convenience
 pub use event::{Event, EventKind};

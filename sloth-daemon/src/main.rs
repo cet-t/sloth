@@ -10,17 +10,69 @@ use sloth_core::hook::{
 };
 use sloth_core::ipc::start_ipc_server;
 use sloth_core::log;
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::time::Duration;
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     TrayIconBuilder,
 };
+use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS};
+use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
 };
 
+/// Windows-named-object single-instance guard. Without this, nothing stops
+/// two `sloth.exe` processes from running at once (e.g. the settings
+/// window's "auto-start if not running" fallback firing twice from a rapid
+/// double-click before the first instance's IPC server is up, or a leftover
+/// process from manual testing) -- each installing its own keyboard hook
+/// and its own IPC pipe instance (PIPE_UNLIMITED_INSTANCES lets that
+/// succeed silently), so a client's status query can end up answered by
+/// whichever instance happens to be listening, with no guarantee it's the
+/// one the user thinks is "the" daemon. The handle is intentionally never
+/// closed -- it must live for the whole process lifetime, and the OS
+/// reclaims it on exit regardless.
+///
+/// Returns `true` if this process won the race and should proceed as the
+/// one true daemon; `false` if another instance already holds it.
+fn acquire_single_instance_lock() -> bool {
+    let name: Vec<u16> = "Global\\sloth-daemon-singleton"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        match CreateMutexW(None, true, windows::core::PCWSTR(name.as_ptr())) {
+            Ok(handle) => {
+                let already_running = std::io::Error::last_os_error().raw_os_error()
+                    == Some(ERROR_ALREADY_EXISTS.0 as i32);
+                if already_running {
+                    let _ = CloseHandle(handle);
+                    false
+                } else {
+                    // Deliberately not closing `handle` (see doc comment
+                    // above); `HANDLE` is a plain Copy wrapper with no Drop,
+                    // so simply not calling CloseHandle is enough to leak it
+                    // for the process lifetime.
+                    true
+                }
+            }
+            Err(_) => {
+                // If we can't even create the mutex, don't block startup
+                // over it -- fail open rather than bricking the daemon.
+                true
+            }
+        }
+    }
+}
+
 fn main() -> Result<()> {
+    if !acquire_single_instance_lock() {
+        eprintln!("sloth-daemon: another instance is already running, exiting");
+        return Ok(());
+    }
+
     sloth_core::loader::register_default_loader(Box::new(
         sloth_dvorakj_adapter::RmapDvorakJLayoutLoader::new(),
     ));
@@ -73,10 +125,21 @@ fn main() -> Result<()> {
     let menu_channel = MenuEvent::receiver();
 
     // Debounced file watcher for layout hot-reload (NFR-4 safe boundary: reload clears pressed).
-    // Watch the samples dir + config for simplicity in prototype.
+    // Watch the samples dir + config for simplicity in prototype. `data/` is
+    // resolved relative to CWD, same as AppConfig::load above -- if the
+    // daemon exe was launched from a folder without a sibling `data/` (e.g.
+    // double-clicked straight out of target/release instead of dist/ or the
+    // repo root), skip watching instead of letting `?` kill the whole
+    // process (and, with it, the tray icon that was just created).
     let (tx, rx) = std::sync::mpsc::channel();
     let mut watcher: RecommendedWatcher = notify::recommended_watcher(tx)?;
-    watcher.watch(Path::new("data"), RecursiveMode::Recursive)?;
+    if Path::new("data").is_dir() {
+        if let Err(e) = watcher.watch(Path::new("data"), RecursiveMode::Recursive) {
+            sloth_core::notify_err!("watcher: failed to watch data/: {e}");
+        }
+    } else {
+        sloth_core::notify!("watcher: data/ not found next to the exe; hot-reload disabled");
+    }
     // notify 6 uses a Config; default debounce is fine for prototype.
 
     // IPC server (named pipe). On Reload command we call the same reload_layout used by tray.
@@ -227,9 +290,16 @@ fn restart_daemon() {
     }
 }
 
-/// 設定: launch the sloth-config settings window (Slint GUI). Falls back to
-/// opening data/config.json in the OS default handler if the settings binary
-/// can't be found (e.g. not yet built next to the daemon).
+/// 設定: launch the sloth-config settings window (Slint GUI).
+///
+/// Resolution order:
+/// 1. `sloth-config.exe` next to the running daemon binary (the normal case
+///    for a packaged/release build where `build-release.ps1` places both
+///    binaries side by side).
+/// 2. Debug builds only: `cargo run -p sloth-config`, so `cargo run -p
+///    sloth-daemon` alone is a self-sufficient dev workflow -- no separate
+///    `cargo build -p sloth-config` step required.
+/// 3. Opening data/config.json in the OS default handler, as a last resort.
 fn open_settings() {
     let sloth_config = std::env::current_exe()
         .ok()
@@ -246,13 +316,18 @@ fn open_settings() {
             return;
         }
         log::log(format!(
-            "settings: {} not found, falling back to file open",
+            "settings: {} not found",
             exe.display()
         ));
     } else {
-        log::log("settings: could not determine current_exe, falling back to file open");
+        log::log("settings: could not determine current_exe");
     }
 
+    if try_open_settings_via_cargo() {
+        return;
+    }
+
+    log::log("settings: falling back to file open");
     let path = Path::new("data/config.json");
     let target = if path.exists() {
         "data/config.json"
@@ -265,6 +340,66 @@ fn open_settings() {
         .spawn()
     {
         sloth_core::notify_err!("settings: failed to open {target}: {e}");
+    }
+}
+
+/// Workspace-checkout fallback: launch the settings GUI via `cargo run -p
+/// sloth-config` from the workspace root, when `sloth-config.exe` wasn't
+/// found next to the running daemon exe. This covers running the daemon
+/// straight out of a dev checkout (either `cargo run` or a manually built
+/// exe under target/{debug,release}) without a prior separate `cargo build
+/// -p sloth-config` step -- regardless of whether *this* binary itself was
+/// built in debug or release. `CARGO_MANIFEST_DIR` is baked in at compile
+/// time as this crate's own directory (`<workspace>/sloth-daemon`), so its
+/// parent is the workspace root regardless of the daemon's CWD.
+///
+/// Returns `false` (without spawning) if there's no workspace `Cargo.toml`
+/// there (e.g. a packaged/installed build with no source checkout) or
+/// `cargo` isn't on PATH, so the caller falls through to the file-open
+/// fallback instead of spawning a doomed-to-fail `cargo` process.
+fn try_open_settings_via_cargo() -> bool {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|p| p.to_path_buf());
+    let Some(workspace_root) = workspace_root else {
+        return false;
+    };
+    if !workspace_root.join("Cargo.toml").exists() {
+        return false;
+    }
+
+    // CREATE_NO_WINDOW: this daemon is a GUI app (`windows_subsystem =
+    // "windows"`, no console of its own), but `cargo` is a console
+    // subsystem exe -- without this flag, spawning it pops a visible
+    // terminal window. Explicit `Stdio::null()` on all three streams matters
+    // here too: with no console of its own to inherit handles from, a GUI
+    // parent process's stdio handles are invalid, and leaving them
+    // unspecified can make the child fail silently instead of running.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let log_path = workspace_root.join("cargo_fallback.log");
+    let spawn_result = std::process::Command::new("cargo")
+        .args(["run", "--quiet", "-p", "sloth-config"])
+        .current_dir(&workspace_root)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(
+            std::fs::File::create(&log_path)
+                .map(std::process::Stdio::from)
+                .unwrap_or_else(|_| std::process::Stdio::null()),
+        )
+        .spawn();
+    match spawn_result {
+        Ok(_) => {
+            log::log("settings: sloth-config.exe not found, launched via `cargo run -p sloth-config`");
+            true
+        }
+        Err(e) => {
+            log::log(format!(
+                "settings: `cargo run -p sloth-config` failed to spawn: {e}"
+            ));
+            false
+        }
     }
 }
 

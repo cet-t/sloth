@@ -4621,53 +4621,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sloth-config"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "clap",
- "raw-window-handle",
- "rfd",
- "sloth-core",
- "serde_json",
- "slint",
- "slint-build",
- "windows 0.52.0",
-]
-
-[[package]]
-name = "sloth-core"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "bitflags 2.13.0",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "windows 0.52.0",
-]
-
-[[package]]
-name = "sloth-daemon"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "notify",
- "sloth-core",
- "sloth-dvorakj-adapter",
- "tray-icon",
- "windows 0.52.0",
-]
-
-[[package]]
-name = "sloth-dvorakj-adapter"
-version = "0.1.1"
-dependencies = [
- "dvorakj-parser",
- "sloth-core",
-]
-
-[[package]]
 name = "rowan"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5056,6 +5009,63 @@ dependencies = [
  "proc-macro2",
  "quote",
  "spin_on",
+]
+
+[[package]]
+name = "sloth-config"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "raw-window-handle",
+ "rfd",
+ "serde_json",
+ "slint",
+ "slint-build",
+ "sloth-core",
+ "windows 0.52.0",
+]
+
+[[package]]
+name = "sloth-core"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "bitflags 2.13.0",
+ "serde",
+ "serde_json",
+ "sloth-parser",
+ "thiserror 2.0.18",
+ "windows 0.52.0",
+]
+
+[[package]]
+name = "sloth-daemon"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "notify",
+ "sloth-core",
+ "sloth-dvorakj-adapter",
+ "tray-icon",
+ "windows 0.52.0",
+]
+
+[[package]]
+name = "sloth-dvorakj-adapter"
+version = "0.1.1"
+dependencies = [
+ "dvorakj-parser",
+ "sloth-core",
+]
+
+[[package]]
+name = "sloth-parser"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml 0.8.2",
 ]
 
 [[package]]

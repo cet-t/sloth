@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration (default).
+  Paste this into your SignPath project's default artifact configuration.
+  The GitHub Action uploads ./target/dist as a ZIP, so the root element
+  must be <zip-file>. We Authenticode-sign the two Windows executables.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file-set>
+      <include path="sloth.exe" />
+      <include path="sloth-config.exe" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </pe-file-set>
+  </zip-file>
+</artifact-configuration>

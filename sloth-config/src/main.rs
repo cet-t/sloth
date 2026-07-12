@@ -15,6 +15,7 @@ use sloth_core::ipc::{send_command, send_reload_command, IpcCommand, IpcResponse
 use slint::{Model, VecModel};
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 
 slint::include_modules!();
 
@@ -428,34 +429,127 @@ fn open_with_default_app(_path: &Path) -> bool {
     false
 }
 
+/// Marshal a daemon-control op's result back to the UI thread: set the
+/// status text, apply the freshly-queried daemon status, and clear the
+/// in-flight guard so the buttons re-enable. Shared by all three callbacks
+/// in `setup_daemon_callbacks` below.
+fn finish_daemon_op(
+    window_weak: &slint::Weak<AppWindow>,
+    status_text: String,
+    daemon_status: (&'static str, bool),
+) {
+    let window_weak = window_weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(window) = window_weak.upgrade() else {
+            return;
+        };
+        window.set_status_text(status_text.into());
+        apply_daemon_status(&window, daemon_status);
+        window.set_daemon_op_in_flight(false);
+    });
+}
+
 fn setup_daemon_callbacks(window: &AppWindow) {
     let window_weak = window.as_weak();
     window.on_toggle_running(move || {
         let window = window_weak.unwrap();
-        report_ipc_result(
-            &window,
-            send_command(&IpcCommand::ToggleRunning),
-            "切り替えました",
-        );
-        refresh_daemon_status(&window);
+        // A rapid double-click before the first click's result comes back
+        // (daemon_suspended hasn't updated yet) could otherwise fire the
+        // not-running auto-start fallback twice, spawning two daemons that
+        // then race each other to answer IPC status queries -- disable all
+        // three buttons for the duration of the op to rule that out.
+        if window.get_daemon_op_in_flight() {
+            return;
+        }
+        window.set_daemon_op_in_flight(true);
+        // send_command() retries connecting for up to ~2s when the named
+        // pipe doesn't exist yet (see sloth-core/src/ipc/windows.rs), and
+        // the daemon-not-running path below does that *twice* (once here,
+        // once in the status refresh after spawning it) -- running it
+        // synchronously on this callback freezes the whole UI thread for
+        // several seconds. Do the IPC/spawn work on a background thread and
+        // marshal the result back via invoke_from_event_loop.
+        let was_suspended = window.get_daemon_suspended();
+        window.set_status_text("処理中...".into());
+        let window_weak = window_weak.clone();
+        std::thread::spawn(move || {
+            let status_text = match send_command(&IpcCommand::ToggleRunning) {
+                // Daemon not running at all: "再生" here means "start it
+                // up", not "resume an already-running one". A raw IPC
+                // connection error (no named pipe to connect to) is the
+                // daemon-not-running signal; anything else is a real
+                // failure worth surfacing.
+                Err(_) if was_suspended => match spawn_daemon() {
+                    Ok(()) => "デーモンを起動しました".to_string(),
+                    Err(e) => format!("デーモンの起動に失敗: {e}"),
+                },
+                Ok(IpcResponse::Ok) => "切り替えました".to_string(),
+                Ok(r) => format!("{r:?}"),
+                Err(e) => format!("デーモンに接続できません: {e}"),
+            };
+            finish_daemon_op(&window_weak, status_text, query_daemon_status());
+        });
     });
 
     let window_weak = window.as_weak();
     window.on_quit(move || {
         let window = window_weak.unwrap();
-        report_ipc_result(&window, send_command(&IpcCommand::Quit), "終了しました");
-        refresh_daemon_status(&window);
+        if window.get_daemon_op_in_flight() {
+            return;
+        }
+        window.set_daemon_op_in_flight(true);
+        let window_weak = window_weak.clone();
+        std::thread::spawn(move || {
+            let result = send_command(&IpcCommand::Quit);
+            let ok = matches!(result, Ok(IpcResponse::Ok));
+            // The daemon replies "Ok" immediately but only exits ~200ms
+            // later (see sloth-daemon's Quit handler) so it can flush this
+            // very response first. Querying status right away would still
+            // see it as running and leave the toggle button showing "停止"
+            // (stop) even though the daemon is about to disappear -- the
+            // next click would then read that stale "still running" state,
+            // skip the not-running auto-start path, and fail to connect.
+            if ok {
+                std::thread::sleep(Duration::from_millis(400));
+            }
+            let status_text = match result {
+                Ok(IpcResponse::Ok) => "終了しました".to_string(),
+                Ok(r) => format!("{r:?}"),
+                Err(e) => format!("デーモンに接続できません: {e}"),
+            };
+            finish_daemon_op(&window_weak, status_text, query_daemon_status());
+        });
     });
 
     let window_weak = window.as_weak();
     window.on_restart(move || {
         let window = window_weak.unwrap();
-        report_ipc_result(
-            &window,
-            send_command(&IpcCommand::Restart),
-            "再起動しました",
-        );
-        refresh_daemon_status(&window);
+        if window.get_daemon_op_in_flight() {
+            return;
+        }
+        window.set_daemon_op_in_flight(true);
+        // Restarting a daemon that isn't running has nothing to connect to
+        // in the first place -- same daemon-not-running signal and same
+        // auto-start fallback as "再生" above ("restart" when nothing is
+        // running just means "start").
+        let was_suspended = window.get_daemon_suspended();
+        let window_weak = window_weak.clone();
+        std::thread::spawn(move || {
+            let status_text = match send_command(&IpcCommand::Restart) {
+                Err(_) if was_suspended => match spawn_daemon() {
+                    Ok(()) => "デーモンを起動しました".to_string(),
+                    Err(e) => format!("デーモンの起動に失敗: {e}"),
+                },
+                Ok(IpcResponse::Ok) => "再起動しました".to_string(),
+                Ok(r) => format!("{r:?}"),
+                Err(e) => format!("デーモンに接続できません: {e}"),
+            };
+            // Same reasoning as Quit above: restart_daemon() also exits the
+            // old process a short moment after replying, and the new
+            // instance needs a beat to install its own IPC server.
+            std::thread::sleep(Duration::from_millis(400));
+            finish_daemon_op(&window_weak, status_text, query_daemon_status());
+        });
     });
 }
 
@@ -630,23 +724,73 @@ fn spawn_always_on_top() {
 #[cfg(not(windows))]
 fn spawn_always_on_top() {}
 
-fn report_ipc_result(window: &AppWindow, result: anyhow::Result<IpcResponse>, ok_text: &str) {
-    match result {
-        Ok(IpcResponse::Ok) => window.set_status_text(ok_text.into()),
-        Ok(r) => window.set_status_text(format!("{r:?}").into()),
-        Err(e) => window.set_status_text(format!("デーモンに接続できません: {e}").into()),
+/// Launch the daemon (`sloth.exe`) when the settings window's "再生" toggle
+/// is clicked while it isn't running at all. Mirrors the daemon's own
+/// `sloth-config.exe` lookup (sibling exe first, `cargo run` fallback for a
+/// dev checkout with no built daemon exe yet) so the pair is symmetric.
+#[cfg(windows)]
+fn spawn_daemon() -> Result<()> {
+    use std::os::windows::process::CommandExt;
+
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("sloth.exe")));
+    if let Some(exe) = &sibling {
+        if exe.exists() {
+            std::process::Command::new(exe).spawn()?;
+            return Ok(());
+        }
     }
+
+    // Dev-checkout fallback: only if a workspace Cargo.toml is actually
+    // there (never true in a packaged dist/, where the sibling exe above is
+    // guaranteed to exist -- see build-release.ps1).
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|p| p.to_path_buf());
+    let Some(workspace_root) = workspace_root else {
+        anyhow::bail!("could not determine workspace root");
+    };
+    if !workspace_root.join("Cargo.toml").exists() {
+        anyhow::bail!("sloth.exe not found next to sloth-config.exe");
+    }
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new("cargo")
+        .args(["run", "--quiet", "-p", "sloth-daemon"])
+        .current_dir(&workspace_root)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    Ok(())
 }
 
-fn refresh_daemon_status(window: &AppWindow) {
-    let (text, suspended) = match send_command(&IpcCommand::Status) {
+#[cfg(not(windows))]
+fn spawn_daemon() -> Result<()> {
+    anyhow::bail!("not supported on this platform")
+}
+
+/// The (possibly slow -- up to ~2s if the daemon isn't running, see
+/// send_command's retry loop) IPC round trip, split out from window access
+/// so it can run on a background thread.
+fn query_daemon_status() -> (&'static str, bool) {
+    match send_command(&IpcCommand::Status) {
         Ok(IpcResponse::Status { suspended, .. }) => {
             (if suspended { "停止中" } else { "稼働中" }, suspended)
         }
         _ => ("未起動", true),
-    };
+    }
+}
+
+fn apply_daemon_status(window: &AppWindow, (text, suspended): (&'static str, bool)) {
     window.set_running_status_text(text.into());
     window.set_daemon_suspended(suspended);
+}
+
+fn refresh_daemon_status(window: &AppWindow) {
+    apply_daemon_status(window, query_daemon_status());
 }
 
 fn refresh_profile_layout_text(window: &AppWindow, cfg: &AppConfig) {

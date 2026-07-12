@@ -1,7 +1,7 @@
 {
   "profiles": {
     "default": {
-      "layout": "D:/.repo/sloth/data/layouts/圧縮版_新下駄配列.txt",
+      "layout": "data/layouts/圧縮版_新下駄配列.txt",
       "toggles": {
         "enable_sands": true,
         "enable_gestures": false,
@@ -21,7 +21,7 @@
     "per_app": {},
     "default_profile": "default"
   },
-  "default_layout": "D:/.repo/sloth/data/layouts/圧縮版_新下駄配列.txt",
+  "default_layout": "data/layouts/圧縮版_新下駄配列.txt",
   "disable_keys": [],
   "enable_log": true,
   "activate_only_when_ime_on": true,

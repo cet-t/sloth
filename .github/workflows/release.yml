@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+*"
+  workflow_dispatch:
+
+permissions:
+  contents: write      # create GitHub release + upload assets
+  id-token: write     # OIDC for keyless cosign signing
+  actions: read       # SignPath action reads workflow/artifact metadata
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          # Future phases (uncomment after adding targets in Cargo.toml):
+          # - target: x86_64-apple-darwin
+          #   os: macos-latest
+          # - target: aarch64-apple-darwin
+          #   os: macos-latest
+          # - target: x86_64-unknown-linux-gnu
+          #   os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install cargo-dist
+        uses: cargo-bins/cargo-dist@v0.9.0
+        with:
+          command: build
+          cargo-dist-version: v0.9.0
+
+      # Built artifacts live in ./target/dist/
+      - name: Upload unsigned artifact (Windows)
+        id: upload-unsigned
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-${{ matrix.target }}
+          path: ./target/dist
+
+      # SignPath submits the uploaded artifact, signs the .exe with its
+      # trusted Authenticode cert, and downloads the signed result.
+      - name: Sign with SignPath (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_POLICY_NAME }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: ./target/signed
+
+      - name: Replace with signed artifacts (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          rm -rf ./target/dist
+          mv ./target/signed/* ./target/dist
+
+      - name: Upload final artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: ./target/dist
+
+  release:
+    name: sign + release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign artifacts with cosign (keyless, OIDC)
+        env:
+          COSIGN_YES: "true"
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          for f in dist/**/*; do
+            if [ -f "$f" ]; then
+              echo "cosign sign-blob: $f"
+              cosign sign-blob --yes "$f" --output-signature "$f.cosign"
+            fi
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**
+          body: "sloth ${{ github.ref_name }}"
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -80,6 +80,12 @@ export component AppWindow inherits Window {
     in property <string> status_text;
     in property <string> running_status_text;
     in property <bool> daemon_suspended;
+    // While true, the 再生/停止・再起動・終了 buttons are disabled. Set
+    // around each async daemon-control operation so a rapid double-click
+    // can't fire the same command (or the not-running auto-start fallback)
+    // twice before the first one's result comes back and updates
+    // daemon_suspended -- that race could otherwise spawn two daemons.
+    in property <bool> daemon_op_in_flight;
     in property <string> current_profile_text;
     in property <string> current_layout_text;
 
@@ -469,6 +475,7 @@ export component AppWindow inherits Window {
                                 width: 80px;
                                 height: 32px;
                                 horizontal-stretch: 0;
+                                enabled: !daemon_op_in_flight;
                                 clicked => {
                                     toggle_running();
                                 }
@@ -479,6 +486,7 @@ export component AppWindow inherits Window {
                                 width: 80px;
                                 height: 32px;
                                 horizontal-stretch: 0;
+                                enabled: !daemon_op_in_flight;
                                 clicked => {
                                     restart();
                                 }
@@ -489,6 +497,7 @@ export component AppWindow inherits Window {
                                 width: 80px;
                                 height: 32px;
                                 horizontal-stretch: 0;
+                                enabled: !daemon_op_in_flight;
                                 clicked => {
                                     quit();
                                 }
