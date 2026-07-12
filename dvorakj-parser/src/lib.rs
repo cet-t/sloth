@@ -34,6 +34,9 @@ pub mod json;
 #[cfg(feature = "ffi")]
 pub mod ffi;
 
+#[cfg(feature = "sloth")]
+pub mod sloth;
+
 /// Parse an already-decoded DvorakJ layout string into a [`ParseReport`].
 ///
 /// Comment blocks (`/* … */`) are stripped internally, matching the legacy

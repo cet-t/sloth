@@ -6,4 +6,4 @@ license.workspace = true
 
 [dependencies]
 sloth-core = { path = "../sloth-core" }
-dvorakj-parser = { path = "../dvorakj-parser", features = ["encoding"] }
+dvorakj-parser = { path = "../dvorakj-parser", features = ["encoding", "sloth"] }

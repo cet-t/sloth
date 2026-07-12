@@ -1,15 +1,15 @@
 {
   "profiles": {
-    "default": {
-      "layout": "data/layouts/圧縮版_新下駄配列.txt",
+    "colemak": {
+      "layout": "data/layouts/samples/toy_simul.en.txt",
       "toggles": {
         "enable_sands": true,
         "enable_gestures": false,
         "enable_shortcuts": false
       }
     },
-    "colemak": {
-      "layout": "data/layouts/samples/toy_simul.en.txt",
+    "default": {
+      "layout": "D:/.repo/rmap/config-idea/shingeta.toml",
       "toggles": {
         "enable_sands": true,
         "enable_gestures": false,
@@ -21,7 +21,7 @@
     "per_app": {},
     "default_profile": "default"
   },
-  "default_layout": "data/layouts/圧縮版_新下駄配列.txt",
+  "default_layout": "D:/.repo/rmap/config-idea/shingeta.toml",
   "disable_keys": [],
   "enable_log": true,
   "activate_only_when_ime_on": true,

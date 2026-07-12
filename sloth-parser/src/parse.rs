@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::key::{Key, KeyChord};
 use crate::model::{
-    CompileError, ComboValue, CompiledLayer, CompiledLayout, Config, KeyboardLayout, Layer,
+    ComboValue, CompileError, CompiledLayer, CompiledLayout, Config, KeyboardLayout, Layer,
     OutputSeq, OutputToken, ParseError, SpecialKey,
 };
 
@@ -120,12 +120,36 @@ impl Config {
             sequences.insert(keys, seq);
         }
 
+        // Derived matcher hints: the hand-written TOML/JSON schema has no
+        // syntax (yet) for sustained layers, so layer_maps/layer_taps/
+        // layer_triggers/sustained_triggers stay empty here -- only a
+        // DvorakJ-sourced layout (via dvorakj-parser's `sloth` feature)
+        // populates those. combo_keys/prefix_triggers, on the other hand,
+        // are fully derivable from combos/sequences, so compute them for
+        // every source format instead of leaving it to each caller.
+        let combo_keys: std::collections::BTreeSet<Key> = combos
+            .keys()
+            .flat_map(|chord| chord.as_slice().iter().copied())
+            .collect();
+        let prefix_triggers: std::collections::BTreeSet<Key> = sequences
+            .keys()
+            .filter_map(|seq| seq.first().copied())
+            .collect();
+
         Ok(CompiledLayout {
             name: self.meta.name,
+            mode: crate::model::LayoutMode::default(),
+            input_mode: crate::model::InputMode::default(),
             keyboard,
             layers: layers.into_iter().collect(),
+            layer_maps: BTreeMap::new(),
+            layer_taps: BTreeMap::new(),
+            layer_triggers: std::collections::BTreeSet::new(),
             combos,
+            combo_keys,
+            sustained_triggers: std::collections::BTreeSet::new(),
             sequences,
+            prefix_triggers,
             states: self.states,
         })
     }
@@ -277,20 +301,60 @@ fn physical_row(row: usize, keyboard: KeyboardLayout) -> &'static [Key] {
             Key::Slash,
         ],
         (KeyboardLayout::Jis, 0) => &[
-            Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6,
-            Key::Num7, Key::Num8, Key::Num9, Key::Num0, Key::Minus, Key::Caret, Key::Yen,
+            Key::Num1,
+            Key::Num2,
+            Key::Num3,
+            Key::Num4,
+            Key::Num5,
+            Key::Num6,
+            Key::Num7,
+            Key::Num8,
+            Key::Num9,
+            Key::Num0,
+            Key::Minus,
+            Key::Caret,
+            Key::Yen,
         ],
         (KeyboardLayout::Jis, 1) => &[
-            Key::Q, Key::W, Key::E, Key::R, Key::T, Key::Y, Key::U, Key::I, Key::O, Key::P,
-            Key::AtSign, Key::LBracket,
+            Key::Q,
+            Key::W,
+            Key::E,
+            Key::R,
+            Key::T,
+            Key::Y,
+            Key::U,
+            Key::I,
+            Key::O,
+            Key::P,
+            Key::AtSign,
+            Key::LBracket,
         ],
         (KeyboardLayout::Jis, 2) => &[
-            Key::A, Key::S, Key::D, Key::F, Key::G, Key::H, Key::J, Key::K, Key::L, Key::Semicolon,
-            Key::Colon, Key::RBracket,
+            Key::A,
+            Key::S,
+            Key::D,
+            Key::F,
+            Key::G,
+            Key::H,
+            Key::J,
+            Key::K,
+            Key::L,
+            Key::Semicolon,
+            Key::Colon,
+            Key::RBracket,
         ],
         (KeyboardLayout::Jis, 3) => &[
-            Key::Z, Key::X, Key::C, Key::V, Key::B, Key::N, Key::M, Key::Comma, Key::Dot,
-            Key::Slash, Key::Backslash,
+            Key::Z,
+            Key::X,
+            Key::C,
+            Key::V,
+            Key::B,
+            Key::N,
+            Key::M,
+            Key::Comma,
+            Key::Dot,
+            Key::Slash,
+            Key::Backslash,
         ],
         (_, _) => &[],
     }

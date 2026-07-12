@@ -1,7 +1,18 @@
-#![windows_subsystem = "windows"]
 //! sloth-daemon: resident remapper. Owns hooks, applies layouts, IPC server, tray.
+//!
+//! Deliberately *not* `#![windows_subsystem = "windows"]`: that would make
+//! CLI usage (`-h`, `convert`) unreliable, since a GUI-subsystem process
+//! never gets a console from the OS and has to fight different shells'
+//! differing child-process/handle-inheritance behavior to get one (tried
+//! `AttachConsole`+`SetStdHandle`; it was flaky across shells and made
+//! things worse in some). Console subsystem instead: CLI usage gets a
+//! console the normal, reliable way for free, and [`hide_console_window`]
+//! detaches the resident daemon's own auto-allocated one immediately on
+//! entering that path, before the tray/hook ever runs -- so there's no
+//! lingering console window for the actual background-daemon use case.
 
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 use notify::event::EventKind;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use sloth_core::config::AppConfig;
@@ -11,17 +22,51 @@ use sloth_core::hook::{
 use sloth_core::ipc::start_ipc_server;
 use sloth_core::log;
 use std::os::windows::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     TrayIconBuilder,
 };
 use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS};
+use windows::Win32::System::Console::FreeConsole;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
 };
+
+/// Detach from the console the OS auto-allocated for this (console
+/// subsystem) process. Called once, right at the top of the resident-daemon
+/// path -- before the tray/hook/IPC server ever start -- so the background
+/// daemon never shows a lingering console window, while CLI invocations
+/// (`-h`, `convert`) never reach this call and keep their console.
+fn hide_console_window() {
+    unsafe {
+        let _ = FreeConsole();
+    }
+}
+
+#[derive(Parser)]
+#[command(version, about)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Convert a layout file from another source format into sloth TOML.
+    Convert {
+        /// Convert a DvorakJ .txt layout file. (The only source format
+        /// today; a future one would get its own flag alongside this,
+        /// e.g. `--other <PATH>`, without changing this one's shape.)
+        #[arg(long = "dj", visible_alias = "dvorakj", value_name = "PATH")]
+        dj: Option<PathBuf>,
+        /// Output path (default: the input path with a .toml extension).
+        #[arg(short = 'o', long = "out", value_name = "OUT")]
+        out: Option<PathBuf>,
+    },
+}
 
 /// Windows-named-object single-instance guard. Without this, nothing stops
 /// two `sloth.exe` processes from running at once (e.g. the settings
@@ -68,13 +113,29 @@ fn acquire_single_instance_lock() -> bool {
 }
 
 fn main() -> Result<()> {
+    if let Some(Commands::Convert { dj, out }) = Cli::parse().command {
+        return run_convert(dj, out);
+    }
+
+    // No subcommand -> entering the resident daemon path. Hide the console
+    // this (console-subsystem) process was auto-allocated with -- CLI
+    // invocations above never reach this line, so their console stays.
+    hide_console_window();
+
     if !acquire_single_instance_lock() {
         eprintln!("sloth-daemon: another instance is already running, exiting");
         return Ok(());
     }
 
+    // Both DvorakJ `.txt` and sloth TOML/JSON are loadable: each source
+    // format compiles into the same `sloth_parser::CompiledLayout`
+    // internally (see sloth-core::sloth_parser::to_core_layout), so nothing
+    // downstream needs to know or care which one a given layout file is.
     sloth_core::loader::register_default_loader(Box::new(
-        sloth_dvorakj_adapter::RmapDvorakJLayoutLoader::new(),
+        sloth_core::loader::CompositeLoader::new(vec![
+            Box::new(sloth_dvorakj_adapter::RmapDvorakJLayoutLoader::new()),
+            Box::new(sloth_core::sloth_parser::SlothLayoutLoader::new()),
+        ]),
     ));
 
     // Load config early so we know whether file logging is enabled (it must
@@ -230,10 +291,13 @@ fn main() -> Result<()> {
                 evt.kind,
                 EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
             ) {
-                // Only care about .txt or config.json changes
+                // Only care about layout (.txt / .toml / .json) or
+                // config.json changes -- .json is shared between
+                // config.json and a sloth-format layout, both should
+                // trigger a reload either way.
                 let relevant = evt.paths.iter().any(|p| {
                     let s = p.to_string_lossy();
-                    s.ends_with(".txt") || s.ends_with("config.json")
+                    s.ends_with(".txt") || s.ends_with(".toml") || s.ends_with(".json")
                 });
                 if relevant {
                     sloth_core::notify!("Watcher: layout/config change detected -> reload");
@@ -401,6 +465,37 @@ fn try_open_settings_via_cargo() -> bool {
             false
         }
     }
+}
+
+/// `sloth convert --dj <PATH> [-o <OUT>]`: convert a layout file from
+/// another source format into sloth TOML. `dj`/`out` come straight from
+/// clap's `Commands::Convert` (see the `Cli` definition above); adding a
+/// second source format later just means a new `Option<PathBuf>` field
+/// there and a matching branch here, no parsing logic to touch. Runs
+/// standalone: no hook, tray, or single-instance lock.
+fn run_convert(dj: Option<PathBuf>, out: Option<PathBuf>) -> Result<()> {
+    let Some(input) = dj else {
+        anyhow::bail!("specify a source format and path, e.g. --dj <PATH>");
+    };
+
+    let bytes = std::fs::read(&input)
+        .map_err(|e| anyhow::anyhow!("reading {}: {e}", input.display()))?;
+    let id = input.to_string_lossy().to_string();
+    let options = dvorakj_parser::ParseOptions::from_source_id(&id);
+    let report = dvorakj_parser::parse_bytes(&bytes, &id, options)
+        .map_err(|e| anyhow::anyhow!("parsing {}: {e}", input.display()))?;
+    let compiled = dvorakj_parser::sloth::to_compiled_layout(report.layout);
+    let result = sloth_parser::to_toml(&compiled);
+
+    let out = out.unwrap_or_else(|| input.with_extension("toml"));
+    std::fs::write(&out, &result.toml)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", out.display()))?;
+
+    println!("converted {} -> {}", input.display(), out.display());
+    for w in &result.warnings {
+        eprintln!("warning: {w}");
+    }
+    Ok(())
 }
 
 /// Create a minimal 16x16 RGBA icon (no external assets).

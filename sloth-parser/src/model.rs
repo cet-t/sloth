@@ -1,6 +1,6 @@
 //! Schema types (serde) and compiled output for the sloth layout config.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::Deserialize;
 
@@ -156,16 +156,64 @@ pub struct CompiledLayer {
     pub keys: BTreeMap<Key, OutputSeq>,
 }
 
-/// Fully compiled layout, ready for downstream conversion.
-#[derive(Debug, Clone)]
+/// How a layout interprets 同時打鍵/順押し timing. `sloth-parser` itself
+/// doesn't act on this, it just carries it through from whichever source
+/// format declared it (DvorakJ layouts always know theirs; hand-written
+/// TOML/JSON layouts default to `Mixed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayoutMode {
+    Legacy,
+    Sequential,
+    Simultaneous,
+    #[default]
+    Mixed,
+}
+
+/// Per-layout input interpretation. Reserved for future kana/romaji support;
+/// layouts compiled today are always `Direct`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputMode {
+    #[default]
+    Direct,
+    Romaji,
+    Kana,
+}
+
+/// Fully compiled layout: the single canonical "sloth format" internal
+/// representation produced from *any* source format (hand-written TOML/JSON
+/// via [`crate::compile_toml`]/[`crate::compile_json`], or a DvorakJ `.txt`
+/// via `dvorakj-parser`'s `sloth` feature). Downstream crates (e.g.
+/// `sloth-core`) convert this into their own runtime `Layout` type without
+/// needing to know which source format a given layout came from.
+#[derive(Debug, Clone, Default)]
 pub struct CompiledLayout {
     pub name: String,
+    pub mode: LayoutMode,
+    pub input_mode: InputMode,
     pub keyboard: KeyboardLayout,
     pub layers: HashMap<String, CompiledLayer>,
+    /// Sustained (while-held) layer chords -- e.g. SandS-style
+    /// `-option-input` triggers -- keyed by the canonically-sorted trigger
+    /// chord, mapping content key → output while that chord is held.
+    pub layer_maps: BTreeMap<Vec<Key>, BTreeMap<Key, OutputSeq>>,
+    /// Tap output when a layer trigger is released alone (no content
+    /// partner), keyed by the single trigger key.
+    pub layer_taps: BTreeMap<Key, OutputSeq>,
+    /// Keys that act as sustained-layer triggers (participate in
+    /// `layer_maps`/`layer_taps`).
+    pub layer_triggers: BTreeSet<Key>,
     /// 同時押し: a canonically-ordered key set → output.
     pub combos: BTreeMap<KeyChord, OutputSeq>,
+    /// Union of every key that participates in any `combos` entry.
+    pub combo_keys: BTreeSet<Key>,
+    /// Keys that participate in `layer_maps` as sustained (while-held)
+    /// triggers, as opposed to one-shot 同時打鍵 chords.
+    pub sustained_triggers: BTreeSet<Key>,
     /// 順押し: an ordered key list → output.
     pub sequences: BTreeMap<Vec<Key>, OutputSeq>,
+    /// Keys that can start a 順押し sequence (first element of some
+    /// `sequences` key).
+    pub prefix_triggers: BTreeSet<Key>,
     /// State name → layer name selection (IME/modifier switching).
     pub states: HashMap<String, String>,
 }

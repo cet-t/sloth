@@ -10,9 +10,9 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use slint::{Model, VecModel};
 use sloth_core::config::AppConfig;
 use sloth_core::ipc::{send_command, send_reload_command, IpcCommand, IpcResponse};
-use slint::{Model, VecModel};
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -140,7 +140,7 @@ fn settings_window_parent() -> Option<HwndParent> {
 }
 
 async fn pick_layout_file_async() -> Option<String> {
-    let mut dialog = rfd::AsyncFileDialog::new().add_filter("Layout", &["txt"]);
+    let mut dialog = rfd::AsyncFileDialog::new().add_filter("Layout", &["txt", "toml", "json"]);
     let start_dir = Path::new("data/layouts");
     if start_dir.exists() {
         dialog = dialog.set_directory(start_dir);

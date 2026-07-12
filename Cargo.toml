@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "sloth-core",
+  "sloth-parser",
   "dvorakj-parser",
   "sloth-dvorakj-adapter",
   "sloth-daemon",

@@ -24,13 +24,15 @@
 mod key;
 mod model;
 mod parse;
+mod serialize;
 
 pub use key::{canon_key_order, canon_sort, Key, KeyChord};
 pub use model::{
-    CompileError, CompiledLayer, CompiledLayout, Config, Error, KeyboardLayout, Layer, Meta,
-    Modifiers, OutputSeq, OutputToken, ParseError, SpecialKey,
+    CompileError, CompiledLayer, CompiledLayout, Config, Error, InputMode, KeyboardLayout, Layer,
+    LayoutMode, Meta, Modifiers, OutputSeq, OutputToken, ParseError, SpecialKey,
 };
 pub use parse::{compile_json, compile_toml, parse_json, parse_toml};
+pub use serialize::{to_toml, ToTomlResult};
 
 #[cfg(test)]
 mod tests {
@@ -186,8 +188,7 @@ inherit = "nope"
 
         // {enter} token parsed into a Named special key:
         // base row1 col3 (R) -> 、 + Enter
-        let seq = l
-            .layers["base"]
+        let seq = l.layers["base"]
             .keys
             .get(&Key::R)
             .expect("R mapped in base");
@@ -264,5 +265,33 @@ grid = [
             l.combos.get(&KeyChord::new([Key::K, Key::Q])),
             Some(&vec![OutputToken::Text("K".into())])
         );
+    }
+
+    #[test]
+    fn to_toml_round_trips_shingeta_fixture() {
+        let src = include_str!("../../config-idea/shingeta.toml");
+        let original = compile_toml(src).expect("compile shingeta");
+
+        let result = to_toml(&original);
+        // shingeta uses combos with a lone `,` (Comma) key, which can't
+        // round-trip through the comma-joined spec string (see
+        // `serialize::join_key_names`'s doc comment) -- those specific
+        // entries are expected to warn and drop, nothing else should.
+        assert!(
+            result.warnings.iter().all(|w| w.contains("Comma")),
+            "unexpected non-Comma warnings: {:?}",
+            result.warnings
+        );
+
+        let reparsed = compile_toml(&result.toml).expect("re-parse serialized toml");
+        assert_eq!(reparsed.name, original.name);
+        let original_combos_sans_comma: std::collections::BTreeMap<_, _> = original
+            .combos
+            .iter()
+            .filter(|(chord, _)| !chord.as_slice().contains(&Key::Comma))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        assert_eq!(reparsed.combos, original_combos_sans_comma);
+        assert_eq!(reparsed.layers["base"].keys, original.layers["base"].keys);
     }
 }
