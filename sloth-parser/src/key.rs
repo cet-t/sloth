@@ -300,7 +300,9 @@ fn resolve_symbol(name: &str) -> Option<Key> {
         "," => Key::Comma,
         "." => Key::Dot,
         "/" => Key::Slash,
-        "+" => Key::Equal,
+        // No `"+"` alias: which physical key produces `+` is a keyboard-
+        // layout question (Shift+`=` on US, Shift+`;` on JIS), and key
+        // names here are physical, layout-independent identifiers.
         _ => return None,
     })
 }
