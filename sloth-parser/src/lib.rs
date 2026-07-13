@@ -344,6 +344,70 @@ grid = [
     }
 
     #[test]
+    fn to_toml_round_trips_non_base_layers_exactly() {
+        // kana is written as `inherit = "base"` plus only the keys that
+        // differ from base -- re-parsing must give back exactly the same
+        // kana map, not base ∪ kana with stray extra keys.
+        let src = r#"
+[meta]
+name = "x"
+[layers.base]
+grid = [["g"], ["q"], ["a"]]
+[layers.kana]
+inherit = "base"
+[layers.kana.override]
+"q" = "か"
+"#;
+        let original = compile_toml(src).expect("compile");
+        let result = to_toml(&original);
+        assert!(
+            result.warnings.is_empty(),
+            "unexpected warnings: {:?}",
+            result.warnings
+        );
+        // The kana section must be a diff: `inherit = "base"` present, and
+        // only the overridden key written out (not base's untouched keys).
+        assert!(result.toml.contains("[layers.kana]\ninherit = \"base\""));
+        let kana_section = result.toml.split("[layers.kana.override]").nth(1).unwrap();
+        assert!(kana_section.contains("q = \"か\""));
+        assert!(!kana_section.contains("\"`\""), "base-equal keys must not be re-written");
+
+        let reparsed = compile_toml(&result.toml).expect("re-parse");
+        assert_eq!(reparsed.layers["base"].keys, original.layers["base"].keys);
+        assert_eq!(reparsed.layers["kana"].keys, original.layers["kana"].keys);
+    }
+
+    #[test]
+    fn to_toml_warns_when_layer_misses_base_keys() {
+        // A compiled layer missing a key base has can't be represented
+        // (no "remove inherited key" syntax): it must warn, and the
+        // re-parsed layer gains the key back (documented lossiness).
+        let mut l = compile_toml(
+            r#"
+[meta]
+name = "x"
+[layers.base]
+grid = [["g"], ["q"]]
+[layers.kana]
+inherit = "base"
+[layers.kana.override]
+"q" = "か"
+"#,
+        )
+        .expect("compile");
+        l.layers.get_mut("kana").unwrap().keys.remove(&Key::Grave);
+
+        let result = to_toml(&l);
+        assert!(
+            result.warnings.iter().any(|w| w.contains("kana")),
+            "expected a missing-key warning for kana: {:?}",
+            result.warnings
+        );
+        let reparsed = compile_toml(&result.toml).expect("re-parse");
+        assert!(reparsed.layers["kana"].keys.contains_key(&Key::Grave));
+    }
+
+    #[test]
     fn to_toml_round_trips_shingeta_fixture() {
         let src = include_str!("../../config-idea/shingeta.toml");
         let original = compile_toml(src).expect("compile shingeta");

@@ -36,6 +36,24 @@ pub fn to_toml(l: &CompiledLayout) -> ToTomlResult {
     };
     out.push_str(&format!("keyboard = {}\n", toml_string(keyboard)));
 
+    // Layers are written as `.override` maps (not bare `[layers.<name>]`
+    // grids) since a compiled layer's keys aren't necessarily confined to
+    // the 4-row physical grid template (e.g. Space, Enter).
+    //
+    // "base" is written first, as a plain override map: with no `inherit`
+    // set it defaults to inheriting "base" itself, which `Config::compile`
+    // resolves as "my own (absent-here) grid plus these overrides" rather
+    // than a cycle -- i.e. exactly this map.
+    //
+    // Every other layer is written as `inherit = "base"` plus only the keys
+    // that *differ* from base. Without the diff, re-parsing would give the
+    // layer base's keys *plus* its own -- writing only the differing keys
+    // makes the round trip exact whenever the layer covers base (the normal
+    // case, since compiled layers are produced by inheriting base in the
+    // first place). A compiled layer that is *missing* a key base has can't
+    // be represented (the schema has no "remove this inherited key" syntax
+    // yet), so that leaks back in on re-parse; warn instead of hiding it.
+    let base = l.layers.get("base");
     let mut layer_names: Vec<&String> = l.layers.keys().collect();
     layer_names.sort();
     for name in layer_names {
@@ -44,17 +62,45 @@ pub fn to_toml(l: &CompiledLayout) -> ToTomlResult {
             continue;
         }
         out.push('\n');
-        // Written as a named `.override` map (not a bare `[layers.<name>]`
-        // grid) since a compiled layer's keys aren't necessarily confined
-        // to the 4-row physical grid template (e.g. Space, Enter). An
-        // override with no `inherit` set defaults to inheriting "base",
-        // but that's not the self-reference footgun it looks like: pass 1
-        // of `Config::compile` always fills in every named layer (empty if
-        // it has no `grid`) *before* pass 2 applies any layer's override,
-        // so even `[layers.base.override]` safely layers on top of
-        // `[layers.base]`'s own (absent-here) grid instead of looping.
+        if name == "base" || base.is_none() {
+            // No base to diff against: write the full map.
+            if name != "base" {
+                // `inherit` defaults to "base" when an override is present;
+                // this layout has no base layer at all, so make the layer
+                // inherit *itself* instead -- self-inherit resolves to "own
+                // (absent-here) grid plus these overrides", i.e. exactly
+                // this map, and re-parsing doesn't fail on a missing "base".
+                out.push_str(&format!("[layers.{}]\n", toml_key_ident(name)));
+                out.push_str(&format!("inherit = {}\n", toml_string(name)));
+            }
+            out.push_str(&format!("[layers.{}.override]\n", toml_key_ident(name)));
+            write_key_map(&mut out, &layer.keys, &mut warnings);
+            continue;
+        }
+        let base = base.unwrap();
+        let diff: BTreeMap<Key, OutputSeq> = layer
+            .keys
+            .iter()
+            .filter(|(k, v)| base.keys.get(k) != Some(v))
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        let missing: Vec<&Key> = base
+            .keys
+            .keys()
+            .filter(|k| !layer.keys.contains_key(k))
+            .collect();
+        if !missing.is_empty() {
+            warnings.push(format!(
+                "layer '{name}': {} key(s) present in base but not in this \
+                 layer ({missing:?}) can't be masked by the TOML schema and \
+                 will reappear in it on re-parse",
+                missing.len()
+            ));
+        }
+        out.push_str(&format!("[layers.{}]\n", toml_key_ident(name)));
+        out.push_str("inherit = \"base\"\n");
         out.push_str(&format!("[layers.{}.override]\n", toml_key_ident(name)));
-        write_key_map(&mut out, &layer.keys, &mut warnings);
+        write_key_map(&mut out, &diff, &mut warnings);
     }
 
     if !l.combos.is_empty() {
