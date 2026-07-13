@@ -1,15 +1,15 @@
 {
   "profiles": {
-    "colemak": {
-      "layout": "data/layouts/samples/toy_simul.en.txt",
+    "default": {
+      "layout": "data/layouts/shingeta.toml",
       "toggles": {
         "enable_sands": true,
         "enable_gestures": false,
         "enable_shortcuts": false
       }
     },
-    "default": {
-      "layout": "D:/.repo/rmap/config-idea/shingeta.toml",
+    "colemak": {
+      "layout": "data/layouts/samples/toy_simul.en.txt",
       "toggles": {
         "enable_sands": true,
         "enable_gestures": false,
@@ -21,7 +21,7 @@
     "per_app": {},
     "default_profile": "default"
   },
-  "default_layout": "D:/.repo/rmap/config-idea/shingeta.toml",
+  "default_layout": "data/layouts/shingeta.toml",
   "disable_keys": [],
   "enable_log": true,
   "activate_only_when_ime_on": true,
