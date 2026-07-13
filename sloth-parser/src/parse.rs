@@ -38,46 +38,29 @@ impl Config {
         };
 
         // Pass 1: grid-based layers (positions → physical keys).
-        let mut layers: BTreeMap<String, CompiledLayer> = BTreeMap::new();
+        let mut grids: BTreeMap<String, CompiledLayer> = BTreeMap::new();
         for (name, layer) in &self.layers {
-            layers.insert(name.clone(), compile_grid(layer, keyboard));
+            grids.insert(name.clone(), compile_grid(layer, keyboard));
         }
 
-        // Pass 2: inherit + override (needs base layers already present).
-        for (name, layer) in &self.layers {
-            if layer.inherit.is_none() && layer.override_.is_none() {
-                continue;
-            }
-            let base_name = layer.inherit.as_deref().unwrap_or("base");
-            let base = layers
-                .get(base_name)
-                .ok_or_else(|| CompileError::MissingLayer(base_name.to_string()))?;
-            let mut keys = base.keys.clone();
-            if let Some(ov) = &layer.override_ {
-                // Named trigger → output overrides.
-                for (kname, out) in &ov.map {
-                    let k = Key::from_name(kname)
-                        .ok_or_else(|| CompileError::UnknownKey(kname.clone()))?;
-                    let seq = cell_to_seq(out);
-                    if !seq.is_empty() {
-                        keys.insert(k, seq);
-                    }
-                }
-                // Positional grid overrides (same shape as a layer `grid`).
-                if let Some(grid) = &ov.grid {
-                    for (r, row) in grid.iter().enumerate() {
-                        let phys = physical_row(r, keyboard);
-                        let n = phys.len().min(row.len());
-                        for i in 0..n {
-                            let seq = cell_to_seq(&row[i]);
-                            if !seq.is_empty() {
-                                keys.insert(phys[i], seq);
-                            }
-                        }
-                    }
-                }
-            }
-            layers.insert(name.clone(), CompiledLayer { keys });
+        // Pass 2: inherit + override, resolved recursively (memoized) so a
+        // layer always sees its base's *fully resolved* map -- chained
+        // inherits (kana inherits shift inherits base) must not depend on
+        // the HashMap iteration order of `self.layers`. Inherit cycles are
+        // a compile error, with one deliberate carve-out: a layer whose
+        // inherit resolves to itself (e.g. `[layers.base.override]` with no
+        // `inherit`, which defaults to "base") means "my own grid plus
+        // these overrides", so it bottoms out at the pass-1 grid instead.
+        let mut layers: BTreeMap<String, CompiledLayer> = BTreeMap::new();
+        for name in self.layers.keys() {
+            resolve_layer(
+                name,
+                &self.layers,
+                &grids,
+                &mut layers,
+                &mut Vec::new(),
+                keyboard,
+            )?;
         }
 
         // 同時押し (combo): key set → output (order-independent).
@@ -153,6 +136,74 @@ impl Config {
             states: self.states,
         })
     }
+}
+
+/// Resolve one layer's effective key map into `resolved`, recursively
+/// resolving its inherit base first (memoized: each layer is computed once,
+/// then reused). `stack` holds the names currently being resolved, for
+/// cycle detection. See the pass-2 comment in [`Config::compile`] for the
+/// self-inherit carve-out.
+fn resolve_layer(
+    name: &str,
+    defs: &std::collections::HashMap<String, Layer>,
+    grids: &BTreeMap<String, CompiledLayer>,
+    resolved: &mut BTreeMap<String, CompiledLayer>,
+    stack: &mut Vec<String>,
+    keyboard: KeyboardLayout,
+) -> Result<(), CompileError> {
+    if resolved.contains_key(name) {
+        return Ok(());
+    }
+    let layer = defs
+        .get(name)
+        .ok_or_else(|| CompileError::MissingLayer(name.to_string()))?;
+
+    // No inherit/override: the pass-1 grid *is* the effective map.
+    if layer.inherit.is_none() && layer.override_.is_none() {
+        resolved.insert(name.to_string(), grids[name].clone());
+        return Ok(());
+    }
+
+    let base_name = layer.inherit.as_deref().unwrap_or("base");
+    let mut keys = if base_name == name {
+        // Self-inherit: overrides layer on top of this layer's own grid.
+        grids[name].keys.clone()
+    } else {
+        if stack.iter().any(|n| n == base_name) {
+            return Err(CompileError::InheritCycle(base_name.to_string()));
+        }
+        stack.push(name.to_string());
+        resolve_layer(base_name, defs, grids, resolved, stack, keyboard)?;
+        stack.pop();
+        resolved[base_name].keys.clone()
+    };
+
+    if let Some(ov) = &layer.override_ {
+        // Named trigger → output overrides.
+        for (kname, out) in &ov.map {
+            let k =
+                Key::from_name(kname).ok_or_else(|| CompileError::UnknownKey(kname.clone()))?;
+            let seq = cell_to_seq(out);
+            if !seq.is_empty() {
+                keys.insert(k, seq);
+            }
+        }
+        // Positional grid overrides (same shape as a layer `grid`).
+        if let Some(grid) = &ov.grid {
+            for (r, row) in grid.iter().enumerate() {
+                let phys = physical_row(r, keyboard);
+                let n = phys.len().min(row.len());
+                for i in 0..n {
+                    let seq = cell_to_seq(&row[i]);
+                    if !seq.is_empty() {
+                        keys.insert(phys[i], seq);
+                    }
+                }
+            }
+        }
+    }
+    resolved.insert(name.to_string(), CompiledLayer { keys });
+    Ok(())
 }
 
 fn split_keys(spec: &str) -> Result<Vec<Key>, CompileError> {

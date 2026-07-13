@@ -159,6 +159,82 @@ grid = [["G"], ["Q"], ["A"], ["Z"]]
     }
 
     #[test]
+    fn chained_inherit_sees_resolved_base() {
+        // kana inherits shift, which itself has an override on top of base.
+        // kana must see shift's *resolved* map (base + shift's override)
+        // regardless of layer iteration order.
+        let src = r#"
+[meta]
+name = "x"
+[layers.base]
+grid = [["g"], ["q"], ["a"]]
+[layers.shift]
+inherit = "base"
+[layers.shift.override]
+"q" = "Q"
+[layers.kana]
+inherit = "shift"
+[layers.kana.override]
+"a" = "あ"
+"#;
+        // Compile repeatedly: HashMap iteration order varies run to run,
+        // so a resolution-order bug shows up as flaky results here.
+        for _ in 0..16 {
+            let l = compile_toml(src).expect("compile");
+            assert_eq!(
+                l.layers["kana"].keys.get(&Key::Q),
+                Some(&vec![OutputToken::Text("Q".into())]),
+                "kana must inherit shift's override, not shift's bare grid"
+            );
+            assert_eq!(
+                l.layers["kana"].keys.get(&Key::A),
+                Some(&vec![OutputToken::Text("あ".into())])
+            );
+            assert_eq!(
+                l.layers["kana"].keys.get(&Key::Grave),
+                Some(&vec![OutputToken::Text("g".into())])
+            );
+        }
+    }
+
+    #[test]
+    fn inherit_cycle_is_reported() {
+        let bad = r#"
+[meta]
+name = "x"
+[layers.a]
+inherit = "b"
+[layers.b]
+inherit = "a"
+"#;
+        let err = compile_toml(bad).expect_err("should fail");
+        assert!(matches!(err, Error::Compile(CompileError::InheritCycle(_))));
+    }
+
+    #[test]
+    fn self_inherit_layers_on_own_grid() {
+        // `[layers.base.override]` with no `inherit` defaults to "base"
+        // itself: that means "my own grid plus overrides", not a cycle.
+        let src = r#"
+[meta]
+name = "x"
+[layers.base]
+grid = [["g"], ["q"]]
+[layers.base.override]
+"q" = "Q"
+"#;
+        let l = compile_toml(src).expect("compile");
+        assert_eq!(
+            l.layers["base"].keys.get(&Key::Q),
+            Some(&vec![OutputToken::Text("Q".into())])
+        );
+        assert_eq!(
+            l.layers["base"].keys.get(&Key::Grave),
+            Some(&vec![OutputToken::Text("g".into())])
+        );
+    }
+
+    #[test]
     fn missing_inherit_is_reported() {
         let bad = r#"
 [meta]

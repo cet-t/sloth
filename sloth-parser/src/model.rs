@@ -234,6 +234,8 @@ pub enum CompileError {
     MissingLayer(String),
     /// A trigger name (override/combo/sequence) could not be resolved.
     UnknownKey(String),
+    /// `inherit` chains form a cycle (e.g. a inherits b inherits a).
+    InheritCycle(String),
 }
 
 impl std::fmt::Display for ParseError {
@@ -250,6 +252,7 @@ impl std::fmt::Display for CompileError {
         match self {
             CompileError::MissingLayer(n) => write!(f, "missing layer '{n}'"),
             CompileError::UnknownKey(n) => write!(f, "unknown key '{n}'"),
+            CompileError::InheritCycle(n) => write!(f, "inherit cycle through layer '{n}'"),
         }
     }
 }
