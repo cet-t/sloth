@@ -152,7 +152,44 @@ async fn pick_layout_file_async() -> Option<String> {
     dialog
         .pick_file()
         .await
-        .map(|f| f.path().to_string_lossy().replace('\\', "/"))
+        .map(|f| relativize_to_cwd(f.path()))
+}
+
+/// Rewrites an absolute path picked via the OS file dialog to be relative to
+/// the process's current directory (the same base `CONFIG_PATH` and
+/// `data/layouts` are resolved against), so `layout` fields saved in
+/// `data/config.json` stay portable across machines/checkout locations
+/// instead of hard-coding this machine's absolute path. Falls back to the
+/// absolute path (forward-slashed) when there's no common root to relativize
+/// against, e.g. picking a file on a different drive on Windows.
+fn relativize_to_cwd(path: &Path) -> String {
+    let cwd = std::env::current_dir().ok();
+    let relative = cwd.as_deref().and_then(|cwd| relative_path(path, cwd));
+    relative.unwrap_or_else(|| path.to_path_buf()).to_string_lossy().replace('\\', "/")
+}
+
+/// Component-wise `target` relative to `base`, or `None` if they share no
+/// common root (e.g. different drive letters on Windows) and therefore can't
+/// be expressed as a relative path at all.
+fn relative_path(target: &Path, base: &Path) -> Option<std::path::PathBuf> {
+    let target_comps: Vec<_> = target.components().collect();
+    let base_comps: Vec<_> = base.components().collect();
+    let common = target_comps
+        .iter()
+        .zip(base_comps.iter())
+        .take_while(|(t, b)| t == b)
+        .count();
+    if common == 0 {
+        return None;
+    }
+    let mut result = std::path::PathBuf::new();
+    for _ in common..base_comps.len() {
+        result.push("..");
+    }
+    for c in &target_comps[common..] {
+        result.push(c.as_os_str());
+    }
+    Some(result)
 }
 
 // ---------------------------------------------------------------------------
