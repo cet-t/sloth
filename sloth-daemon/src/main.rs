@@ -117,15 +117,19 @@ fn main() -> Result<()> {
         return run_convert(dj, out);
     }
 
-    // No subcommand -> entering the resident daemon path. Hide the console
-    // this (console-subsystem) process was auto-allocated with -- CLI
-    // invocations above never reach this line, so their console stays.
-    hide_console_window();
-
+    // Losing the single-instance race is checked *before* detaching from
+    // the console, so the message is actually visible when the second
+    // instance was launched from a shell (after FreeConsole it would go
+    // nowhere).
     if !acquire_single_instance_lock() {
         eprintln!("sloth-daemon: another instance is already running, exiting");
         return Ok(());
     }
+
+    // Entering the resident daemon path for real. Hide the console this
+    // (console-subsystem) process was auto-allocated with -- CLI
+    // invocations above never reach this line, so their console stays.
+    hide_console_window();
 
     // Both DvorakJ `.txt` and sloth TOML/JSON are loadable: each source
     // format compiles into the same `sloth_parser::CompiledLayout`
@@ -432,8 +436,8 @@ fn try_open_settings_via_cargo() -> bool {
         return false;
     }
 
-    // CREATE_NO_WINDOW: this daemon is a GUI app (`windows_subsystem =
-    // "windows"`, no console of its own), but `cargo` is a console
+    // CREATE_NO_WINDOW: the resident daemon detached from its console via
+    // FreeConsole (see `hide_console_window`), but `cargo` is a console
     // subsystem exe -- without this flag, spawning it pops a visible
     // terminal window. Explicit `Stdio::null()` on all three streams matters
     // here too: with no console of its own to inherit handles from, a GUI
