@@ -46,10 +46,14 @@ pub trait LayoutLoader: Send + Sync {
 /// TOML/JSON) behind a single registered [`LayoutLoader`], without
 /// sloth-core needing to know about any concrete format itself.
 ///
-/// `id`'s file extension picks a preferred try-order: loaders that declare
-/// that extension (via [`LayoutLoader::extensions`]) are tried first, in
-/// registration order; the rest follow as a fallback. The first loader to
-/// parse successfully wins.
+/// `id`'s file extension picks the candidate set: if any loader declares
+/// that extension (via [`LayoutLoader::extensions`]), *only* those loaders
+/// are tried (in registration order) and a parse failure is reported as-is
+/// -- never papered over by handing the bytes to some other format's
+/// (possibly lenient) parser, which could "succeed" with a nonsense layout
+/// (see [`LayoutLoader::extensions`]'s doc comment). Only when no loader
+/// claims the extension (or `id` has none) are all loaders tried in
+/// registration order, first success winning.
 pub struct CompositeLoader {
     loaders: Vec<Box<dyn LayoutLoader>>,
 }
@@ -71,17 +75,23 @@ impl LayoutLoader for CompositeLoader {
 
     fn load(&self, bytes: &[u8], id: &str) -> Result<Layout, LoadError> {
         let ext = extension_of(id);
-        let matches_ext = |l: &&Box<dyn LayoutLoader>| {
+        let matches_ext = |l: &dyn LayoutLoader| {
             ext.as_deref().is_some_and(|e| l.extensions().contains(&e))
         };
-        let ordered = self
+        let by_ext: Vec<&dyn LayoutLoader> = self
             .loaders
             .iter()
-            .filter(matches_ext)
-            .chain(self.loaders.iter().filter(|l| !matches_ext(l)));
+            .map(|l| l.as_ref())
+            .filter(|l| matches_ext(*l))
+            .collect();
+        let candidates: Vec<&dyn LayoutLoader> = if by_ext.is_empty() {
+            self.loaders.iter().map(|l| l.as_ref()).collect()
+        } else {
+            by_ext
+        };
 
         let mut last_err = None;
-        for loader in ordered {
+        for loader in candidates {
             match loader.load(bytes, id) {
                 Ok(layout) => return Ok(layout),
                 Err(e) => last_err = Some(e),
