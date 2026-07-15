@@ -1378,11 +1378,10 @@ checksum = "edf234dd1594d6dd434a8fb8cada51ddbbc593e40e4a01556a0b31c62da2775b"
 
 [[package]]
 name = "dvorakj-parser"
-version = "0.1.1"
+version = "0.1.0"
+source = "git+https://github.com/cet-t/dvorakj-parser#cca559a1bd76e40f415e7b909c21de5859957220"
 dependencies = [
  "encoding_rs",
- "serde",
- "serde_json",
  "sloth-parser",
 ]
 
@@ -5066,6 +5065,7 @@ dependencies = [
 [[package]]
 name = "sloth-parser"
 version = "0.1.0"
+source = "git+https://github.com/cet-t/sloth-parser#8efc74d3b56db26d4c821b89a715dbd4246b5ffd"
 dependencies = [
  "serde",
  "serde_json",

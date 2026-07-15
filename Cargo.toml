@@ -1,8 +1,6 @@
 [workspace]
 members = [
   "sloth-core",
-  "sloth-parser",
-  "dvorakj-parser",
   "sloth-dvorakj-adapter",
   "sloth-daemon",
   "sloth-config",
@@ -24,6 +22,8 @@ thiserror = "2"
 anyhow = "1"
 bitflags = "2"
 clap = { version = "4", features = ["derive"] }
+sloth-parser = { git = "https://github.com/cet-t/sloth-parser" }
+dvorakj-parser = { git = "https://github.com/cet-t/dvorakj-parser" }
 # Platform specific later
 # For now, keep minimal for Phase 1
 
