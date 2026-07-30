@@ -599,11 +599,11 @@ fn vk_to_keycode(vk: u32, _extended: bool, keyboard: KeyboardLayout) -> KeyCode 
     // than on a US/ANSI keyboard (@, ^, ¥ and the extra \(ろ) key).
     if keyboard == KeyboardLayout::Jis {
         match vk as i32 {
-            0xC0 => return KeyCode::AtSign,    // JIS "@" key (VK_OEM_3; US: Grave)
+            0xC0 => return KeyCode::AtSign, // JIS "@" key (VK_OEM_3; US: Grave)
             0xBB => return KeyCode::Semicolon, // JIS ";" key (VK_OEM_PLUS; US: Equal)
-            0xBA => return KeyCode::Colon,     // JIS ":" key (VK_OEM_1; US: Semicolon)
-            0xDC => return KeyCode::Yen,       // JIS "¥" key (VK_OEM_5; US: Backslash)
-            0xDE => return KeyCode::Caret,     // JIS "^" key (VK_OEM_7; US: Quote)
+            0xBA => return KeyCode::Colon,  // JIS ":" key (VK_OEM_1; US: Semicolon)
+            0xDC => return KeyCode::Yen,    // JIS "¥" key (VK_OEM_5; US: Backslash)
+            0xDE => return KeyCode::Caret,  // JIS "^" key (VK_OEM_7; US: Quote)
             0xE2 => return KeyCode::Backslash, // JIS "\ろ" key (VK_OEM_102; no US equivalent)
             _ => {}
         }
@@ -1102,9 +1102,21 @@ mod jis_vk_tests {
     #[test]
     fn us_layout_leaves_symbol_keys_on_ansi_mapping() {
         // ANSI path must be untouched by the JIS overrides.
-        assert_eq!(vk_to_keycode(0xC0, false, KeyboardLayout::Us), KeyCode::Grave);
-        assert_eq!(vk_to_keycode(0xDE, false, KeyboardLayout::Us), KeyCode::Quote);
-        assert_eq!(vk_to_keycode(0xBA, false, KeyboardLayout::Us), KeyCode::Semicolon);
-        assert_eq!(vk_to_keycode(0xBB, false, KeyboardLayout::Us), KeyCode::Equal);
+        assert_eq!(
+            vk_to_keycode(0xC0, false, KeyboardLayout::Us),
+            KeyCode::Grave
+        );
+        assert_eq!(
+            vk_to_keycode(0xDE, false, KeyboardLayout::Us),
+            KeyCode::Quote
+        );
+        assert_eq!(
+            vk_to_keycode(0xBA, false, KeyboardLayout::Us),
+            KeyCode::Semicolon
+        );
+        assert_eq!(
+            vk_to_keycode(0xBB, false, KeyboardLayout::Us),
+            KeyCode::Equal
+        );
     }
 }

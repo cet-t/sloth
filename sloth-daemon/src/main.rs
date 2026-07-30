@@ -383,10 +383,7 @@ fn open_settings() {
             }
             return;
         }
-        log::log(format!(
-            "settings: {} not found",
-            exe.display()
-        ));
+        log::log(format!("settings: {} not found", exe.display()));
     } else {
         log::log("settings: could not determine current_exe");
     }
@@ -459,7 +456,9 @@ fn try_open_settings_via_cargo() -> bool {
         .spawn();
     match spawn_result {
         Ok(_) => {
-            log::log("settings: sloth-config.exe not found, launched via `cargo run -p sloth-config`");
+            log::log(
+                "settings: sloth-config.exe not found, launched via `cargo run -p sloth-config`",
+            );
             true
         }
         Err(e) => {
@@ -482,8 +481,8 @@ fn run_convert(dj: Option<PathBuf>, out: Option<PathBuf>) -> Result<()> {
         anyhow::bail!("specify a source format and path, e.g. --dj <PATH>");
     };
 
-    let bytes = std::fs::read(&input)
-        .map_err(|e| anyhow::anyhow!("reading {}: {e}", input.display()))?;
+    let bytes =
+        std::fs::read(&input).map_err(|e| anyhow::anyhow!("reading {}: {e}", input.display()))?;
     let id = input.to_string_lossy().to_string();
     let options = dvorakj_parser::ParseOptions::from_source_id(&id);
     let report = dvorakj_parser::parse_bytes(&bytes, &id, options)

@@ -232,19 +232,28 @@ impl App {
                         "停止"
                     };
                     if ui
-                        .add_enabled(enabled, egui::Button::new(toggle_label).min_size([72.0, 28.0].into()))
+                        .add_enabled(
+                            enabled,
+                            egui::Button::new(toggle_label).min_size([72.0, 28.0].into()),
+                        )
                         .clicked()
                     {
                         self.spawn_op(DaemonOp::ToggleRunning);
                     }
                     if ui
-                        .add_enabled(enabled, egui::Button::new("再起動").min_size([72.0, 28.0].into()))
+                        .add_enabled(
+                            enabled,
+                            egui::Button::new("再起動").min_size([72.0, 28.0].into()),
+                        )
                         .clicked()
                     {
                         self.spawn_op(DaemonOp::Restart);
                     }
                     if ui
-                        .add_enabled(enabled, egui::Button::new("終了").min_size([72.0, 28.0].into()))
+                        .add_enabled(
+                            enabled,
+                            egui::Button::new("終了").min_size([72.0, 28.0].into()),
+                        )
                         .clicked()
                     {
                         self.spawn_op(DaemonOp::Quit);
@@ -295,11 +304,7 @@ impl App {
                 .selected_text(self.settings.direct_input_key.label())
                 .show_ui(ui, |ui| {
                     for key in DirectInputKey::ALL {
-                        ui.selectable_value(
-                            &mut self.settings.direct_input_key,
-                            key,
-                            key.label(),
-                        );
+                        ui.selectable_value(&mut self.settings.direct_input_key, key, key.label());
                     }
                 });
         });

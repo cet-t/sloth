@@ -75,9 +75,8 @@ impl LayoutLoader for CompositeLoader {
 
     fn load(&self, bytes: &[u8], id: &str) -> Result<Layout, LoadError> {
         let ext = extension_of(id);
-        let matches_ext = |l: &dyn LayoutLoader| {
-            ext.as_deref().is_some_and(|e| l.extensions().contains(&e))
-        };
+        let matches_ext =
+            |l: &dyn LayoutLoader| ext.as_deref().is_some_and(|e| l.extensions().contains(&e));
         let by_ext: Vec<&dyn LayoutLoader> = self
             .loaders
             .iter()
