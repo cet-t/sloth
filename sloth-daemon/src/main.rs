@@ -358,7 +358,7 @@ fn restart_daemon() {
     }
 }
 
-/// 設定: launch the sloth-config settings window (Slint GUI).
+/// 設定: launch the sloth-config settings window (egui GUI).
 ///
 /// Resolution order:
 /// 1. `sloth-config.exe` next to the running daemon binary (the normal case

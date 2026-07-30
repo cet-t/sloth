@@ -1,10 +1,11 @@
 [meta]
 name = "shingeta"
-keyboard = "jis"
+keyboard = "en"
 
 [layers.base]
 grid = [
   [
+"｀",
     "１",
     "２",
     "３",
@@ -15,7 +16,7 @@ grid = [
     "８",
     "９",
     "０",
-    "－",
+    "ー",
     "＝",
   ],
   [
@@ -44,7 +45,6 @@ grid = [
     "し",
     "な",
     "{BS}",
-    "”",
   ],
   [
     "す",

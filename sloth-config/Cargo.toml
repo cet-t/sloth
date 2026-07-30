@@ -13,8 +13,8 @@ sloth-core = { path = "../sloth-core" }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
-slint = "1.16"
-rfd = "0.15"
+eframe = "0.35"
+egui-file-dialog = "0.14"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.52", features = [
@@ -22,7 +22,3 @@ windows = { version = "0.52", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
 ] }
-raw-window-handle = "0.6"
-
-[build-dependencies]
-slint-build = "1.16"

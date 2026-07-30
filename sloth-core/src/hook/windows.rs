@@ -599,11 +599,12 @@ fn vk_to_keycode(vk: u32, _extended: bool, keyboard: KeyboardLayout) -> KeyCode 
     // than on a US/ANSI keyboard (@, ^, ¥ and the extra \(ろ) key).
     if keyboard == KeyboardLayout::Jis {
         match vk as i32 {
-            0xC0 => return KeyCode::AtSign,    // JIS "@" key (US: Grave)
-            0xDE => return KeyCode::Colon,     // JIS ":" key (US: Quote)
-            0xDC => return KeyCode::Yen,       // JIS "¥" key (US: Backslash)
-            0xBB => return KeyCode::Caret,     // JIS "^" key (US: Equal)
-            0xE2 => return KeyCode::Backslash, // JIS "\ろ" key (no US equivalent)
+            0xC0 => return KeyCode::AtSign,    // JIS "@" key (VK_OEM_3; US: Grave)
+            0xBB => return KeyCode::Semicolon, // JIS ";" key (VK_OEM_PLUS; US: Equal)
+            0xBA => return KeyCode::Colon,     // JIS ":" key (VK_OEM_1; US: Semicolon)
+            0xDC => return KeyCode::Yen,       // JIS "¥" key (VK_OEM_5; US: Backslash)
+            0xDE => return KeyCode::Caret,     // JIS "^" key (VK_OEM_7; US: Quote)
+            0xE2 => return KeyCode::Backslash, // JIS "\ろ" key (VK_OEM_102; no US equivalent)
             _ => {}
         }
     }
@@ -820,9 +821,11 @@ fn keycode_to_vk(k: KeyCode, keyboard: KeyboardLayout) -> VIRTUAL_KEY {
     if keyboard == KeyboardLayout::Jis {
         match k {
             KeyCode::AtSign => return VIRTUAL_KEY(0xC0),
-            KeyCode::Colon => return VIRTUAL_KEY(0xDE),
+            KeyCode::Semicolon => return VIRTUAL_KEY(0xBB),
+            KeyCode::Colon => return VIRTUAL_KEY(0xBA),
             KeyCode::Yen => return VIRTUAL_KEY(0xDC),
-            KeyCode::Caret => return VIRTUAL_KEY(0xBB),
+            KeyCode::Caret => return VIRTUAL_KEY(0xDE),
+            KeyCode::Backslash => return VIRTUAL_KEY(0xE2),
             _ => {}
         }
     }
@@ -913,8 +916,10 @@ fn keycode_to_char_fallback(k: KeyCode) -> Option<char> {
 
 /// Resolve layout bytes for a concrete app_id using the provided AppConfig (per-app or default).
 /// Falls back to sample then embedded (NFR-4: never panic, always produce a usable Layout).
-/// The physical keyboard layout (JIS vs US) is determined entirely by the
-/// loaded file's name suffix (`.jp.txt` / `.en.txt`), not the OS locale.
+/// The physical keyboard layout (JIS vs US) is carried by the loaded layout
+/// itself: for sloth TOML/JSON it comes from the `[meta] keyboard` field, and
+/// for DvorakJ `.txt` from the file-name suffix (`.jp.txt` / `.en.txt`). The OS
+/// input locale is not consulted.
 fn load_layout_for_app(app_id: &str, cfg: &AppConfig) -> Layout {
     let ldr = loader::default_loader();
     let layout_path = cfg.layout_path_for_app(app_id);
@@ -1052,5 +1057,54 @@ fn get_foreground_app_id() -> String {
         } else {
             name
         }
+    }
+}
+
+#[cfg(test)]
+mod jis_vk_tests {
+    use super::*;
+
+    // The five JIS-only physical keys and their real Windows OEM virtual-key
+    // codes (KBDJPN). vk_to_keycode(JIS) must map each to the same KeyCode that
+    // sloth-parser's JIS `physical_row` binds the grid cell to, otherwise a
+    // JIS-labelled layout silently mistypes on these keys.
+    const JIS_KEYS: &[(u32, KeyCode)] = &[
+        (0xC0, KeyCode::AtSign),    // VK_OEM_3    "@"
+        (0xBB, KeyCode::Semicolon), // VK_OEM_PLUS ";"
+        (0xBA, KeyCode::Colon),     // VK_OEM_1    ":"
+        (0xDC, KeyCode::Yen),       // VK_OEM_5    "¥"
+        (0xDE, KeyCode::Caret),     // VK_OEM_7    "^"
+        (0xE2, KeyCode::Backslash), // VK_OEM_102  "\ろ"
+    ];
+
+    #[test]
+    fn jis_vk_maps_to_expected_keycode() {
+        for &(vk, code) in JIS_KEYS {
+            assert_eq!(
+                vk_to_keycode(vk, false, KeyboardLayout::Jis),
+                code,
+                "JIS VK {vk:#04X} should map to {code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn jis_keycode_roundtrips_to_vk() {
+        for &(vk, code) in JIS_KEYS {
+            assert_eq!(
+                keycode_to_vk(code, KeyboardLayout::Jis).0 as u32,
+                vk,
+                "JIS {code:?} should inject as VK {vk:#04X}"
+            );
+        }
+    }
+
+    #[test]
+    fn us_layout_leaves_symbol_keys_on_ansi_mapping() {
+        // ANSI path must be untouched by the JIS overrides.
+        assert_eq!(vk_to_keycode(0xC0, false, KeyboardLayout::Us), KeyCode::Grave);
+        assert_eq!(vk_to_keycode(0xDE, false, KeyboardLayout::Us), KeyCode::Quote);
+        assert_eq!(vk_to_keycode(0xBA, false, KeyboardLayout::Us), KeyCode::Semicolon);
+        assert_eq!(vk_to_keycode(0xBB, false, KeyboardLayout::Us), KeyCode::Equal);
     }
 }
