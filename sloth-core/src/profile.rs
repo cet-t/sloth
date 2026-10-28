@@ -1,7 +1,8 @@
 //! Profile: layout + toggles. Per-app state in daemon.
 
-use crate::layout::LayoutId;
 use serde::{Deserialize, Serialize};
+
+use crate::layout::LayoutId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {

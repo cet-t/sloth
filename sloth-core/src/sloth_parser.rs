@@ -162,7 +162,7 @@ fn to_core_seq(s: PSeq) -> OutputSeq {
 }
 
 fn to_core_mods(m: sloth_parser::Modifiers) -> crate::Modifiers {
-    crate::Modifiers::from_bits_truncate(m.bits())
+    crate::Modifiers::from_bits(m.bits())
 }
 
 fn to_core_special(s: sloth_parser::SpecialKey) -> crate::SpecialKey {

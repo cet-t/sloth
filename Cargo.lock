@@ -527,6 +527,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitflags2"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3c74f4b1bb1aa28efcd00e843ef65bb4dbbcf9d3bfa39cc1aafdc135cbcd361"
+dependencies = [
+ "bitflags2-derive",
+ "serde",
+]
+
+[[package]]
+name = "bitflags2-derive"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24541525b581e23811bcbed08b8b9d03807840e50a8e3919bce232386bcb999a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
 name = "block"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3711,7 +3732,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "sloth-config"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3724,10 +3745,10 @@ dependencies = [
 
 [[package]]
 name = "sloth-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
- "bitflags 2.13.0",
+ "bitflags2",
  "serde",
  "serde_json",
  "sloth-parser",
@@ -3737,7 +3758,7 @@ dependencies = [
 
 [[package]]
 name = "sloth-daemon"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3752,7 +3773,7 @@ dependencies = [
 
 [[package]]
 name = "sloth-dvorakj-adapter"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dvorakj-parser",
  "sloth-core",
@@ -3903,6 +3924,17 @@ name = "syn"
 version = "2.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e665b8803e7b1d2a727f4023456bbbbe74da67099c585258af0ad9c5013b9b99"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
 dependencies = [
  "proc-macro2",
  "quote",

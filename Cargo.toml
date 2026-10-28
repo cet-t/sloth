@@ -8,9 +8,9 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
-license = "NYSL-0.9982"
+license = "Apache-2.0"
 authors = ["cet-t"]
 repository = "https://github.com/cet-t/sloth"
 
@@ -20,7 +20,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 anyhow = "1"
-bitflags = "2"
+bitflags2 = "0.3"
 clap = { version = "4", features = ["derive"] }
 sloth-parser = { git = "https://github.com/cet-t/sloth-parser" }
 dvorakj-parser = { git = "https://github.com/cet-t/dvorakj-parser" }

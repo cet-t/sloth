@@ -1,10 +1,11 @@
 //! Daemon control: the IPC round trips the settings window's プロセス tab
 //! drives, plus the "daemon isn't running at all" auto-start fallback.
 
-use anyhow::Result;
-use sloth_core::ipc::{send_command, IpcCommand, IpcResponse};
 use std::path::Path;
 use std::time::Duration;
+
+use anyhow::Result;
+use sloth_core::ipc::{send_command, IpcCommand, IpcResponse};
 
 /// Human-readable daemon state plus the `suspended` flag the UI uses to pick
 /// between the 再生 / 停止 labels.

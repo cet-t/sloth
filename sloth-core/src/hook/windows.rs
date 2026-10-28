@@ -699,28 +699,28 @@ fn inject_output_seq(seq: &OutputSeq, keyboard: KeyboardLayout) {
             OutputToken::Key { code, mods } => {
                 // Press required modifiers first (for this token)
                 let mut pressed_mods: Vec<VIRTUAL_KEY> = vec![];
-                if mods.contains(Modifiers::SHIFT) || mods.contains(Modifiers::SHIFT_L) {
+                if mods.has_flag(Modifiers::SHIFT) || mods.has_flag(Modifiers::SHIFT_L) {
                     pressed_mods.push(VK_LSHIFT);
                 }
-                if mods.contains(Modifiers::SHIFT_R) {
+                if mods.has_flag(Modifiers::SHIFT_R) {
                     pressed_mods.push(VK_RSHIFT);
                 }
-                if mods.contains(Modifiers::CTRL) || mods.contains(Modifiers::CTRL_L) {
+                if mods.has_flag(Modifiers::CTRL) || mods.has_flag(Modifiers::CTRL_L) {
                     pressed_mods.push(VK_LCONTROL);
                 }
-                if mods.contains(Modifiers::CTRL_R) {
+                if mods.has_flag(Modifiers::CTRL_R) {
                     pressed_mods.push(VK_RCONTROL);
                 }
-                if mods.contains(Modifiers::ALT) || mods.contains(Modifiers::ALT_L) {
+                if mods.has_flag(Modifiers::ALT) || mods.has_flag(Modifiers::ALT_L) {
                     pressed_mods.push(VK_LMENU);
                 }
-                if mods.contains(Modifiers::ALT_R) {
+                if mods.has_flag(Modifiers::ALT_R) {
                     pressed_mods.push(VK_RMENU);
                 }
-                if mods.contains(Modifiers::META) || mods.contains(Modifiers::META_L) {
+                if mods.has_flag(Modifiers::META) || mods.has_flag(Modifiers::META_L) {
                     pressed_mods.push(VK_LWIN);
                 }
-                if mods.contains(Modifiers::META_R) {
+                if mods.has_flag(Modifiers::META_R) {
                     pressed_mods.push(VK_RWIN);
                 }
 

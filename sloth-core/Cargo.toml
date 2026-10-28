@@ -9,7 +9,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-bitflags = { workspace = true, features = ["serde"] }
+bitflags2 = { workspace = true, features = ["serde"] }
 sloth-parser = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]

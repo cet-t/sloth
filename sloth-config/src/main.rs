@@ -11,14 +11,17 @@
 mod app;
 mod daemon;
 mod settings;
+mod tabs;
+
+use std::path::Path;
 
 use anyhow::Result;
-use app::{App, CONFIG_PATH, WINDOW_SIZE, WINDOW_TITLE};
 use clap::{Parser, Subcommand};
 use eframe::egui;
 use sloth_core::config::AppConfig;
 use sloth_core::ipc::{send_reload_command, IpcResponse};
-use std::path::Path;
+
+use crate::app::{App, CONFIG_PATH, WINDOW_SIZE, WINDOW_TITLE};
 
 #[derive(Parser)]
 #[command(version, about)]
