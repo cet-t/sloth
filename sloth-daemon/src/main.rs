@@ -117,6 +117,8 @@ fn main() -> Result<()> {
         return run_convert(dj, out);
     }
 
+    sloth_core::config::use_packaged_data_directory()?;
+
     // Losing the single-instance race is checked *before* detaching from
     // the console, so the message is actually visible when the second
     // instance was launched from a shell (after FreeConsole it would go

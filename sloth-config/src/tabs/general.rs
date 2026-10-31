@@ -1,7 +1,4 @@
-use std::{
-    ops::Index,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, RichText, Ui};
 use egui_file_dialog::FileDialog;
@@ -51,10 +48,6 @@ impl crate::app::App {
         for _ in common..base_comps.len() {
             result.push("..");
         }
-        target_comps
-            .index(common..)
-            .iter()
-            .for_each(|c| result.push(c.as_os_str()));
         for c in &target_comps[common..] {
             result.push(c.as_os_str());
         }
@@ -161,5 +154,21 @@ impl crate::app::App {
         Self::labeled_row(ui, "処理のディスパッチレート (ms)", |ui| {
             ui.add(egui::DragValue::new(&mut self.settings.dispatch_rate_ms).range(1..=100));
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::App;
+
+    #[test]
+    fn selected_layout_path_is_added_only_once() {
+        let base = std::env::current_dir().unwrap();
+        let target = base.join("data/layouts/shingeta.toml");
+        assert_eq!(
+            App::relative_path(&target, &base),
+            Some(PathBuf::from("data/layouts/shingeta.toml"))
+        );
     }
 }

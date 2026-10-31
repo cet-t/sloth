@@ -70,6 +70,7 @@ fn main() -> Result<()> {
 }
 
 fn run_settings_window() -> Result<()> {
+    sloth_core::config::use_packaged_data_directory()?;
     let cfg = AppConfig::load(Path::new(CONFIG_PATH)).unwrap_or_else(|_| AppConfig::fallback());
 
     let options = eframe::NativeOptions {

@@ -122,6 +122,19 @@ pub struct ProfileDef {
     pub toggles: ProfileToggles,
 }
 
+/// Use the packaged data directory when it is next to the executable. In a
+/// development build there is normally no data directory under target/, so
+/// the caller's working directory continues to be used.
+pub fn use_packaged_data_directory() -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    if let Some(dir) = exe.parent() {
+        if dir.join("data").is_dir() {
+            std::env::set_current_dir(dir)?;
+        }
+    }
+    Ok(())
+}
+
 impl AppConfig {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let s = std::fs::read_to_string(path)?;

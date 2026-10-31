@@ -78,11 +78,11 @@ New-Item -ItemType Directory -Path (Join-Path $dataDest 'layouts\samples') -Forc
 Copy-Item (Join-Path $dataSrc 'config.json') $dataDest
 Write-Host '  + data/config.json'
 
-Get-ChildItem (Join-Path $dataSrc 'layouts') -Filter '*.txt' -File | ForEach-Object {
+Get-ChildItem (Join-Path $dataSrc 'layouts') -File | Where-Object { $_.Extension -in '.txt', '.toml', '.json' } | ForEach-Object {
     Copy-Item $_.FullName (Join-Path $dataDest 'layouts')
     Write-Host "  + data/layouts/$($_.Name)"
 }
-Get-ChildItem (Join-Path $dataSrc 'layouts\samples') -Filter '*.txt' -File | ForEach-Object {
+Get-ChildItem (Join-Path $dataSrc 'layouts\samples') -File | Where-Object { $_.Extension -in '.txt', '.toml', '.json' } | ForEach-Object {
     Copy-Item $_.FullName (Join-Path $dataDest 'layouts\samples')
     Write-Host "  + data/layouts/samples/$($_.Name)"
 }

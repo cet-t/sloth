@@ -1,4 +1,4 @@
-use eframe::egui::{self, Ui};
+use eframe::egui::{self, Color32, Ui};
 
 use crate::{
     app::OpResult,
@@ -33,7 +33,9 @@ impl crate::app::App {
             if ui
                 .add_enabled(
                     enabled,
-                    egui::Button::new(toggle_label).min_size([72.0, 28.0].into()),
+                    egui::Button::new(toggle_label)
+                        .fill(Color32::from_rgb(0x35, 0x8f, 0x31))
+                        .min_size([72.0, 28.0].into()),
                 )
                 .clicked()
             {
@@ -51,7 +53,9 @@ impl crate::app::App {
             if ui
                 .add_enabled(
                     enabled,
-                    egui::Button::new("終了").min_size([72.0, 28.0].into()),
+                    egui::Button::new("終了")
+                        .fill(Color32::from_rgb(0xeb, 0x40, 0x34))
+                        .min_size([72.0, 28.0].into()),
                 )
                 .clicked()
             {
